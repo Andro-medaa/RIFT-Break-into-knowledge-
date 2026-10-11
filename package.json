@@ -1,0 +1,13 @@
+{
+  "name": "rift",
+  "version": "0.1.0",
+  "private": true,
+  "description": "RIFT — AI Teacher PDF Narrator Monorepo",
+  "scripts": {
+    "dev:web": "npm --prefix apps/web run dev",
+    "dev:api": "python -m uvicorn app.main:app --app-dir apps/api --reload --port 8000",
+    "test:api": "python -m pytest apps/api/tests -v",
+    "typecheck:web": "npm --prefix apps/web run typecheck",
+    "build:web": "npm --prefix apps/web run build"
+  }
+}
