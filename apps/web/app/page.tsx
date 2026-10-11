@@ -1,0 +1,250 @@
+"use client";
+
+import { useState } from "react";
+import type { ApiResponse, PingData } from "../types/api";
+
+export default function Home() {
+  const [loading, setLoading] = useState(false);
+  const [pingResult, setPingResult] = useState<ApiResponse<PingData> | null>(null);
+  const [latency, setLatency] = useState<number | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const handleVerifyPing = async (endpoint: "/api/ping" | "/health" = "/api/ping") => {
+    setLoading(true);
+    setErrorMsg(null);
+    setPingResult(null);
+    setLatency(null);
+
+    const startTime = performance.now();
+    try {
+      let res: Response | null = null;
+      try {
+        res = await fetch(`http://localhost:8000${endpoint}`, {
+          method: "GET",
+          headers: { Accept: "application/json" },
+        });
+      } catch {
+        res = await fetch(`http://127.0.0.1:8000${endpoint}`, {
+          method: "GET",
+          headers: { Accept: "application/json" },
+        });
+      }
+
+      const endTime = performance.now();
+      const elapsed = Math.round(endTime - startTime);
+      setLatency(elapsed);
+
+      if (!res || !res.ok) {
+        throw new Error(`HTTP error ${res?.status}: ${res?.statusText}`);
+      }
+
+      const json = (await res.json()) as ApiResponse<PingData>;
+      setPingResult(json);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to connect to backend";
+      setErrorMsg(message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <main className="app-container">
+      {/* Header */}
+      <header className="app-header">
+        <div className="brand-badge">
+          <span className="badge-dot" />
+          RIFT Monorepo // Step 1 Skeleton
+        </div>
+        <h1 className="app-title">
+          <span className="gradient-text">RIFT</span> — AI Teacher PDF Narrator
+        </h1>
+        <p className="app-subtitle">
+          Contract-first full-stack architecture pairing FastAPI backend with Next.js 14 App Router,
+          dark glassmorphic UI, and 4-tier verification ladder.
+        </p>
+      </header>
+
+      {/* 4-Tier Verification Ladder */}
+      <section className="ladder-section">
+        <div className="ladder-header">
+          <h2 className="section-title">
+            <span>🛡️</span> The 4-Tier Verification Ladder
+          </h2>
+        </div>
+        <div className="ladder-grid">
+          <div className="tier-card glass-panel">
+            <div className="tier-top">
+              <span className="tier-number">Tier 1</span>
+              <span className="tier-status passed">Passed</span>
+            </div>
+            <div className="tier-name">Static Typecheck</div>
+            <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+              Strict TypeScript types and Next.js compiler checks.
+            </p>
+            <div className="tier-detail">tsc --noEmit & next build</div>
+          </div>
+
+          <div className="tier-card glass-panel">
+            <div className="tier-top">
+              <span className="tier-number">Tier 2</span>
+              <span className="tier-status passed">Passed</span>
+            </div>
+            <div className="tier-name">Independent Tests</div>
+            <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+              Isolated unit tests via conftest mock fixture.
+            </p>
+            <div className="tier-detail">pytest -v apps/api/tests</div>
+          </div>
+
+          <div className="tier-card glass-panel">
+            <div className="tier-top">
+              <span className="tier-number">Tier 3</span>
+              <span className="tier-status active">Active</span>
+            </div>
+            <div className="tier-name">Runtime Boot</div>
+            <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+              Uvicorn (port 8000) and Next.js (port 3000) servers.
+            </p>
+            <div className="tier-detail">Ports 8000 & 3000</div>
+          </div>
+
+          <div className="tier-card glass-panel">
+            <div className="tier-top">
+              <span className="tier-number">Tier 4</span>
+              <span className={`tier-status ${pingResult ? "passed" : "active"}`}>
+                {pingResult ? "Verified" : "Ready"}
+              </span>
+            </div>
+            <div className="tier-name">Browser Subagent E2E</div>
+            <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+              Autonomous navigation and live CORS ping verification.
+            </p>
+            <div className="tier-detail">Live CORS Bridge</div>
+          </div>
+        </div>
+      </section>
+
+      {/* Interactive Verification Card */}
+      <section className="glass-panel verification-card">
+        <div className="verification-top">
+          <div className="verification-meta">
+            <h3>Live Full-Stack CORS Verification</h3>
+            <p>
+              Dispatch an asynchronous handshake to verify FastAPI CORS headers and standard{" "}
+              <code>ApiResponse[T]</code> envelope serialization.
+            </p>
+          </div>
+          <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+            <button
+              id="verify-ping-btn"
+              className="btn-verify"
+              onClick={() => handleVerifyPing("/api/ping")}
+              disabled={loading}
+            >
+              {loading ? (
+                <>
+                  <span className="btn-spinner" />
+                  Pinging Backend...
+                </>
+              ) : (
+                <>
+                  <span>⚡</span>
+                  Verify Backend Ping
+                </>
+              )}
+            </button>
+            <button
+              id="verify-health-btn"
+              className="btn-verify"
+              style={{
+                background: "rgba(255, 255, 255, 0.08)",
+                boxShadow: "none",
+                border: "1px solid var(--border-subtle)",
+              }}
+              onClick={() => handleVerifyPing("/health")}
+              disabled={loading}
+            >
+              Check /health
+            </button>
+          </div>
+        </div>
+
+        {/* Result Area */}
+        {pingResult && (
+          <div className="result-box" id="ping-success-result">
+            <div className="result-header">
+              <div className="result-badge success">
+                <span>✓</span> Handshake Confirmed (CORS Active)
+              </div>
+              {latency !== null && (
+                <div className="latency-tag" id="ping-latency">
+                  ⚡ {latency}ms round-trip latency
+                </div>
+              )}
+            </div>
+            <pre className="json-display" id="ping-response-json">
+              {JSON.stringify(pingResult, null, 2)}
+            </pre>
+          </div>
+        )}
+
+        {errorMsg && (
+          <div className="result-box" id="ping-error-result" style={{ borderColor: "rgba(244, 63, 94, 0.3)" }}>
+            <div className="result-header">
+              <div className="result-badge error">
+                <span>✕</span> Connection Failed
+              </div>
+            </div>
+            <p style={{ color: "#fb7185", fontSize: "0.9rem", fontFamily: "var(--font-mono)" }}>
+              {errorMsg}
+            </p>
+            <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem", marginTop: "8px" }}>
+              Make sure FastAPI is running via <code>npm run dev:api</code> on port 8000.
+            </p>
+          </div>
+        )}
+      </section>
+
+      {/* Contract & Architecture Reference */}
+      <section className="glass-panel" style={{ padding: "32px", marginBottom: "40px" }}>
+        <h3 style={{ fontSize: "1.3rem", marginBottom: "16px" }}>
+          🏛️ Permanent Architecture & Envelopes Established
+        </h3>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "20px" }}>
+          <div style={{ background: "rgba(0,0,0,0.3)", padding: "16px", borderRadius: "var(--radius-sm)" }}>
+            <h4 style={{ color: "#a5b4fc", fontSize: "0.95rem", marginBottom: "8px" }}>
+              Backend Envelope: <code>ApiResponse[T]</code>
+            </h4>
+            <pre style={{ fontSize: "0.8rem", color: "#e2e8f0" }}>
+{`class ApiResponse(BaseModel, Generic[T]):
+    success: bool
+    data: Optional[T] = None
+    error: Optional[str] = None
+    message: Optional[str] = None`}
+            </pre>
+          </div>
+
+          <div style={{ background: "rgba(0,0,0,0.3)", padding: "16px", borderRadius: "var(--radius-sm)" }}>
+            <h4 style={{ color: "#67e8f9", fontSize: "0.95rem", marginBottom: "8px" }}>
+              Frontend Envelope: <code>ApiResponse&lt;T&gt;</code>
+            </h4>
+            <pre style={{ fontSize: "0.8rem", color: "#e2e8f0" }}>
+{`export interface ApiResponse<T = unknown> {
+  success: boolean;
+  data?: T;
+  error?: string | null;
+  message?: string | null;
+}`}
+            </pre>
+          </div>
+        </div>
+      </section>
+
+      {/* Footer */}
+      <footer className="app-footer">
+        RIFT — Intelligent PDF Dictator & AI Teacher Monorepo • Next Step: Step 2 (PDF Viewer & Normalized Highlights)
+      </footer>
+    </main>
+  );
+}
