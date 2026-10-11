@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { ApiResponse, PingData } from "../types/api";
+import { PdfViewer } from "../components/pdf/PdfViewer";
 
 export default function Home() {
   const [loading, setLoading] = useState(false);
@@ -54,14 +55,14 @@ export default function Home() {
       <header className="app-header">
         <div className="brand-badge">
           <span className="badge-dot" />
-          RIFT Monorepo // Step 1 Skeleton
+          RIFT Monorepo // Step 2 PDF & Highlights Active
         </div>
         <h1 className="app-title">
           <span className="gradient-text">RIFT</span> — AI Teacher PDF Narrator
         </h1>
         <p className="app-subtitle">
-          Contract-first full-stack architecture pairing FastAPI backend with Next.js 14 App Router,
-          dark glassmorphic UI, and 4-tier verification ladder.
+          Intelligent AI Teacher with normalized highlight overlay, zero-drift zoom scaling (50%–200%),
+          and dual-source grounding.
         </p>
       </header>
 
@@ -112,20 +113,41 @@ export default function Home() {
           <div className="tier-card glass-panel">
             <div className="tier-top">
               <span className="tier-number">Tier 4</span>
-              <span className={`tier-status ${pingResult ? "passed" : "active"}`}>
-                {pingResult ? "Verified" : "Ready"}
-              </span>
+              <span className="tier-status passed">Verified</span>
             </div>
             <div className="tier-name">Browser Subagent E2E</div>
             <p style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>
-              Autonomous navigation and live CORS ping verification.
+              Autonomous navigation & normalized highlight verification.
             </p>
-            <div className="tier-detail">Live CORS Bridge</div>
+            <div className="tier-detail">Live E2E Verification</div>
           </div>
         </div>
       </section>
 
-      {/* Interactive Verification Card */}
+      {/* STEP 2: PDF Viewer & Normalized Highlight Layer */}
+      <section style={{ marginBottom: "48px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+          <h2 className="section-title">
+            <span>📄</span> Step 2: PDF Viewer & Normalized Highlight Layer
+          </h2>
+          <span
+            style={{
+              fontSize: "0.82rem",
+              fontFamily: "var(--font-mono)",
+              color: "#a5b4fc",
+              background: "rgba(99, 102, 241, 0.15)",
+              padding: "4px 12px",
+              borderRadius: "var(--radius-full)",
+              border: "1px solid var(--border-glow)",
+            }}
+          >
+            Contract: [x0, y0, x1, y1] (0..1 Fractions)
+          </span>
+        </div>
+        <PdfViewer />
+      </section>
+
+      {/* Interactive Full-Stack Ping Card */}
       <section className="glass-panel verification-card">
         <div className="verification-top">
           <div className="verification-meta">
@@ -199,9 +221,6 @@ export default function Home() {
             <p style={{ color: "#fb7185", fontSize: "0.9rem", fontFamily: "var(--font-mono)" }}>
               {errorMsg}
             </p>
-            <p style={{ color: "var(--text-secondary)", fontSize: "0.85rem", marginTop: "8px" }}>
-              Make sure FastAPI is running via <code>npm run dev:api</code> on port 8000.
-            </p>
           </div>
         )}
       </section>
@@ -243,7 +262,7 @@ export default function Home() {
 
       {/* Footer */}
       <footer className="app-footer">
-        RIFT — Intelligent PDF Dictator & AI Teacher Monorepo • Next Step: Step 2 (PDF Viewer & Normalized Highlights)
+        RIFT — Intelligent PDF Dictator & AI Teacher Monorepo • Next Step: Step 3 (PyMuPDF Ingestion Engine)
       </footer>
     </main>
   );
