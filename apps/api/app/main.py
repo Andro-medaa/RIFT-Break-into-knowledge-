@@ -4,12 +4,15 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.schemas.response import ApiResponse
+from app.routes.documents import router as documents_router
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
     description="FastAPI Backend for RIFT — AI Teacher PDF Narrator",
 )
+
+app.include_router(documents_router)
 
 app.add_middleware(
     CORSMiddleware,

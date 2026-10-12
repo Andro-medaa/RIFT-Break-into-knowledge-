@@ -1,14 +1,17 @@
 "use client";
 
 import { useState } from "react";
-import type { ApiResponse, PingData } from "../types/api";
+import type { ApiResponse, PingData, DocumentMeta, DocumentChunk } from "../types/api";
 import { PdfViewer } from "../components/pdf/PdfViewer";
+import { PdfIngestionBar } from "../components/pdf/PdfIngestionBar";
 
 export default function Home() {
   const [loading, setLoading] = useState(false);
   const [pingResult, setPingResult] = useState<ApiResponse<PingData> | null>(null);
   const [latency, setLatency] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [activeDocMeta, setActiveDocMeta] = useState<DocumentMeta | null>(null);
+  const [parsedChunks, setParsedChunks] = useState<DocumentChunk[]>([]);
 
   const handleVerifyPing = async (endpoint: "/api/ping" | "/health" = "/api/ping") => {
     setLoading(true);
@@ -124,11 +127,18 @@ export default function Home() {
         </div>
       </section>
 
-      {/* STEP 2: PDF Viewer & Normalized Highlight Layer */}
+      {/* STEPS 2 & 3: PDF Ingestion Engine & Normalized Highlight Layer */}
       <section style={{ marginBottom: "48px" }}>
+        <PdfIngestionBar
+          onIngestSuccess={(meta, chunks) => {
+            setActiveDocMeta(meta);
+            setParsedChunks(chunks);
+          }}
+        />
+
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
           <h2 className="section-title">
-            <span>📄</span> Step 2: PDF Viewer & Normalized Highlight Layer
+            <span>📄</span> {activeDocMeta ? activeDocMeta.title : "Document Workspace"} & Highlights
           </h2>
           <span
             style={{
@@ -141,10 +151,10 @@ export default function Home() {
               border: "1px solid var(--border-glow)",
             }}
           >
-            Contract: [x0, y0, x1, y1] (0..1 Fractions)
+            {activeDocMeta ? `PyMuPDF: ${parsedChunks.length} Chunks Loaded` : "Contract: [x0, y0, x1, y1] (0..1 Fractions)"}
           </span>
         </div>
-        <PdfViewer />
+        <PdfViewer parsedChunks={parsedChunks} documentMeta={activeDocMeta} />
       </section>
 
       {/* Interactive Full-Stack Ping Card */}

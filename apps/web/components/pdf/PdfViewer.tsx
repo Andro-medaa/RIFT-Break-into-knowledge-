@@ -1,18 +1,46 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { HighlightLayer } from "./HighlightLayer";
 import { SAMPLE_PAGES, SAMPLE_HIGHLIGHTS } from "./SamplePdfData";
+import { HighlightItem } from "@/types/pdf";
+import type { DocumentChunk, DocumentMeta } from "@/types/api";
 
-export const PdfViewer: React.FC = () => {
+interface PdfViewerProps {
+  parsedChunks?: DocumentChunk[];
+  documentMeta?: DocumentMeta | null;
+}
+
+export const PdfViewer: React.FC<PdfViewerProps> = ({ parsedChunks, documentMeta }) => {
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [zoom, setZoom] = useState<number>(1.0);
   const [spotlightMode, setSpotlightMode] = useState<boolean>(false);
   const [activeHighlightId, setActiveHighlightId] = useState<string | null>("h1-title");
 
-  const totalPages = SAMPLE_PAGES.length;
+  const highlights: HighlightItem[] = useMemo(() => {
+    if (!parsedChunks || parsedChunks.length === 0) {
+      return SAMPLE_HIGHLIGHTS;
+    }
+    return parsedChunks.map((c) => ({
+      id: c.id,
+      pageNo: c.page_no,
+      rects: c.rects,
+      text: c.text,
+      label: c.kind === "heading" ? "Heading" : `Chunk #${c.ord + 1}`,
+      color: c.kind === "heading" ? "cyan" : (c.ord % 3 === 0 ? "purple" : c.ord % 3 === 1 ? "amber" : "emerald"),
+    }));
+  }, [parsedChunks]);
+
+  const totalPages = documentMeta ? documentMeta.page_count : SAMPLE_PAGES.length;
   const activePageData = SAMPLE_PAGES.find((p) => p.pageNo === currentPage) || SAMPLE_PAGES[0];
-  const pageHighlights = SAMPLE_HIGHLIGHTS.filter((h) => h.pageNo === currentPage);
+  const pageHighlights = highlights.filter((h) => h.pageNo === currentPage);
+
+  // When highlights or page change, set active highlight
+  useEffect(() => {
+    if (pageHighlights.length > 0) {
+      setActiveHighlightId(pageHighlights[0].id);
+    }
+  }, [currentPage, highlights]);
 
   // Zoom handlers
   const handleZoomIn = () => {
@@ -140,7 +168,7 @@ export const PdfViewer: React.FC = () => {
               fontFamily: "var(--font-mono)",
             }}
           >
-            <span>✓</span> Normalized Scale Lock
+            <span>✓</span> {parsedChunks && parsedChunks.length > 0 ? "PyMuPDF Live Coordinates" : "Normalized Scale Lock"}
           </div>
         </div>
       </div>
@@ -158,7 +186,7 @@ export const PdfViewer: React.FC = () => {
         }}
       >
         <span style={{ fontSize: "0.78rem", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 700 }}>
-          Page {currentPage} Highlights:
+          Page {currentPage} Highlights ({pageHighlights.length}):
         </span>
         {pageHighlights.map((hl) => {
           const isActive = hl.id === activeHighlightId;
@@ -200,7 +228,7 @@ export const PdfViewer: React.FC = () => {
         >
           {/* Normalized Highlight Layer Overlaid onto Page */}
           <HighlightLayer
-            highlights={SAMPLE_HIGHLIGHTS}
+            highlights={highlights}
             pageNo={currentPage}
             spotlightMode={spotlightMode}
             activeHighlightId={activeHighlightId}
@@ -209,8 +237,10 @@ export const PdfViewer: React.FC = () => {
 
           {/* Rendered Page Content (Document Text Sheet) */}
           <div className="pdf-page-content" id="pdf-rendered-page">
-            <h2 className="pdf-doc-title">{activePageData.title}</h2>
-            <div className="pdf-doc-subtitle">{activePageData.subtitle}</div>
+            <h2 className="pdf-doc-title">{documentMeta ? documentMeta.title : activePageData.title}</h2>
+            <div className="pdf-doc-subtitle">
+              {documentMeta ? `Page ${currentPage} of ${totalPages} • Ingested via PyMuPDF` : activePageData.subtitle}
+            </div>
 
             {activePageData.paragraphs.map((p, idx) => (
               <p key={idx} className="pdf-doc-paragraph">
@@ -219,8 +249,8 @@ export const PdfViewer: React.FC = () => {
             ))}
 
             <div className="pdf-page-footer">
-              <span>RIFT Technical Specification — Foundation Series</span>
-              <span>Page {activePageData.pageNo} / {totalPages}</span>
+              <span>{documentMeta ? `Document ID: ${documentMeta.id}` : "RIFT Technical Specification — Foundation Series"}</span>
+              <span>Page {currentPage} / {totalPages}</span>
             </div>
           </div>
         </div>
