@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { LessonSegment, MoveType, ReadingSession } from '../../types/lesson';
 import { DocumentChunk } from '../../types/api';
 import { AudioPlayer } from '../audio/AudioPlayer';
@@ -12,6 +12,10 @@ interface LessonPlanViewProps {
   activeChunkId: string | null;
   onSelectChunk: (chunkId: string) => void;
   apiBaseUrl?: string;
+  initialSegments?: LessonSegment[];
+  initialSessionId?: string;
+  initialSegOrd?: number;
+  initialSentIdx?: number;
 }
 
 const MOVE_THEMES: Record<MoveType, { label: string; bg: string; border: string; color: string; icon: string }> = {
@@ -66,14 +70,38 @@ export const LessonPlanView: React.FC<LessonPlanViewProps> = ({
   activeChunkId,
   onSelectChunk,
   apiBaseUrl = 'http://localhost:8000',
+  initialSegments,
+  initialSessionId,
+  initialSegOrd = 0,
+  initialSentIdx = 0,
 }) => {
-  const [session, setSession] = useState<ReadingSession | null>(null);
-  const [segments, setSegments] = useState<LessonSegment[]>([]);
+  const [session, setSession] = useState<ReadingSession | null>(
+    initialSessionId && docId
+      ? {
+          id: initialSessionId,
+          doc_id: docId,
+          seg_ord: initialSegOrd,
+          sent_idx: initialSentIdx,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }
+      : null
+  );
+  const [segments, setSegments] = useState<LessonSegment[]>(initialSegments || []);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedSegId, setExpandedSegId] = useState<string | null>(null);
-  const [activeSpokenSeg, setActiveSpokenSeg] = useState<number>(0);
-  const [activeSpokenSent, setActiveSpokenSent] = useState<number>(0);
+  const [activeSpokenSeg, setActiveSpokenSeg] = useState<number>(initialSegOrd);
+  const [activeSpokenSent, setActiveSpokenSent] = useState<number>(initialSentIdx);
+
+  // Sync initial restoration props if provided
+  useEffect(() => {
+    if (initialSegments && initialSegments.length > 0) {
+      setSegments(initialSegments);
+      setActiveSpokenSeg(initialSegOrd);
+      setActiveSpokenSent(initialSentIdx);
+    }
+  }, [initialSegments, initialSegOrd, initialSentIdx]);
 
   const totalEstDurationMs = segments.reduce((sum, seg) => {
     return sum + seg.sentences.reduce((sSum, s) => sSum + s.duration_estimate_ms, 0);
@@ -449,6 +477,8 @@ export const LessonPlanView: React.FC<LessonPlanViewProps> = ({
         <AudioPlayer
           segments={segments}
           sessionId={session ? session.id : undefined}
+          docId={docId}
+          docTitle={docTitle}
           activeSegOrd={activeSpokenSeg}
           activeSentIdx={activeSpokenSent}
           onActiveSentenceChange={(sOrd, sIdx, chunkIds) => {

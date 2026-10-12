@@ -8,13 +8,15 @@ import { LessonPlanView } from "../teach/LessonPlanView";
 import { SAMPLE_PAGES, SAMPLE_HIGHLIGHTS } from "./SamplePdfData";
 import { HighlightItem } from "@/types/pdf";
 import type { DocumentChunk, DocumentMeta } from "@/types/api";
+import type { SavedSessionData } from "@/lib/storage/indexedDb";
 
 interface PdfViewerProps {
   parsedChunks?: DocumentChunk[];
   documentMeta?: DocumentMeta | null;
+  restoredSession?: SavedSessionData | null;
 }
 
-export const PdfViewer: React.FC<PdfViewerProps> = ({ parsedChunks, documentMeta }) => {
+export const PdfViewer: React.FC<PdfViewerProps> = ({ parsedChunks, documentMeta, restoredSession }) => {
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [zoom, setZoom] = useState<number>(1.0);
   const [spotlightMode, setSpotlightMode] = useState<boolean>(false);
@@ -49,6 +51,21 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ parsedChunks, documentMeta
       setCurrentPage(highlights[0].pageNo);
     }
   }, [highlights]);
+
+  // When session is restored, jump cursor to saved segment chunk
+  useEffect(() => {
+    if (restoredSession && restoredSession.segments.length > 0) {
+      setRightTab("lesson");
+      const targetSeg = restoredSession.segments[restoredSession.segOrd] || restoredSession.segments[0];
+      if (targetSeg && targetSeg.chunk_ids && targetSeg.chunk_ids.length > 0) {
+        const chunkId = targetSeg.chunk_ids[0];
+        const h = highlights.find((item) => item.id === chunkId);
+        if (h) {
+          handleSelectChunk(chunkId, h.pageNo);
+        }
+      }
+    }
+  }, [restoredSession, highlights]);
 
   // Synchronized Chunk Selection with Smooth Auto-Scroll
   const handleSelectChunk = (id: string, pageNo: number) => {
@@ -211,7 +228,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ parsedChunks, documentMeta
               fontFamily: "var(--font-mono)",
             }}
           >
-            <span>✓</span> Step 6 Emotional TTS Narration Active
+            <span>✓</span> Step 7 State Machine & Persistence Active
           </div>
         </div>
       </div>
@@ -361,10 +378,14 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ parsedChunks, documentMeta
           <div style={{ flex: 1, overflow: "hidden" }}>
             {rightTab === "lesson" ? (
               <LessonPlanView
-                docId={documentMeta ? documentMeta.id : null}
-                docTitle={documentMeta ? documentMeta.title : undefined}
+                docId={documentMeta ? documentMeta.id : restoredSession?.docId || null}
+                docTitle={documentMeta ? documentMeta.title : restoredSession?.docTitle}
                 chunks={parsedChunks || []}
                 activeChunkId={activeHighlightId}
+                initialSegments={restoredSession?.segments}
+                initialSessionId={restoredSession?.sessionId}
+                initialSegOrd={restoredSession?.segOrd}
+                initialSentIdx={restoredSession?.sentIdx}
                 onSelectChunk={(cId) => {
                   const h = highlights.find((item) => item.id === cId);
                   if (h) {

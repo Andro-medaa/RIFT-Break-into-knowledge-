@@ -4,6 +4,8 @@ import { useState } from "react";
 import type { ApiResponse, PingData, DocumentMeta, DocumentChunk } from "../types/api";
 import { PdfViewer } from "../components/pdf/PdfViewer";
 import { PdfIngestionBar } from "../components/pdf/PdfIngestionBar";
+import { ResumeSessionBanner } from "../components/teach/ResumeSessionBanner";
+import type { SavedSessionData } from "../lib/storage/indexedDb";
 
 export default function Home() {
   const [loading, setLoading] = useState(false);
@@ -12,6 +14,38 @@ export default function Home() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [activeDocMeta, setActiveDocMeta] = useState<DocumentMeta | null>(null);
   const [parsedChunks, setParsedChunks] = useState<DocumentChunk[]>([]);
+  const [restoredSession, setRestoredSession] = useState<SavedSessionData | null>(null);
+
+  const handleResumeSession = async (saved: SavedSessionData) => {
+    setRestoredSession(saved);
+    if (saved.docMeta) {
+      setActiveDocMeta(saved.docMeta);
+    } else {
+      setActiveDocMeta({
+        id: saved.docId,
+        title: saved.docTitle,
+        page_count: 3,
+        chunks_count: saved.segments.length,
+        status: "parsed",
+        created_at: new Date().toISOString(),
+      });
+    }
+
+    if (saved.chunks && saved.chunks.length > 0) {
+      setParsedChunks(saved.chunks);
+    } else {
+      // Fetch chunks from backend
+      try {
+        const res = await fetch(`http://localhost:8000/documents/${saved.docId}/chunks`);
+        if (res.ok) {
+          const json = await res.json();
+          if (json.data) setParsedChunks(json.data);
+        }
+      } catch {
+        // Fallback to sample chunks if needed
+      }
+    }
+  };
 
   const handleVerifyPing = async (endpoint: "/api/ping" | "/health" = "/api/ping") => {
     setLoading(true);
@@ -58,7 +92,7 @@ export default function Home() {
       <header className="app-header">
         <div className="brand-badge">
           <span className="badge-dot" />
-          RIFT Monorepo // Step 6 Emotional TTS Narration Active
+          RIFT Monorepo // Step 7 Cursor & Persistence Active
         </div>
         <h1 className="app-title">
           <span className="gradient-text">RIFT</span> — AI Teacher PDF Narrator
@@ -127,12 +161,15 @@ export default function Home() {
         </div>
       </section>
 
-      {/* STEPS 2 & 3: PDF Ingestion Engine & Normalized Highlight Layer */}
+      {/* STEPS 2, 3, 5, 6, 7: PDF Ingestion Engine & Interactive Workspace */}
       <section style={{ marginBottom: "48px" }}>
+        <ResumeSessionBanner onResume={handleResumeSession} />
+
         <PdfIngestionBar
           onIngestSuccess={(meta, chunks) => {
             setActiveDocMeta(meta);
             setParsedChunks(chunks);
+            setRestoredSession(null);
           }}
         />
 
@@ -154,7 +191,11 @@ export default function Home() {
             {activeDocMeta ? `PyMuPDF: ${parsedChunks.length} Chunks Loaded` : "Contract: [x0, y0, x1, y1] (0..1 Fractions)"}
           </span>
         </div>
-        <PdfViewer parsedChunks={parsedChunks} documentMeta={activeDocMeta} />
+        <PdfViewer
+          parsedChunks={parsedChunks}
+          documentMeta={activeDocMeta}
+          restoredSession={restoredSession}
+        />
       </section>
 
       {/* Interactive Full-Stack Ping Card */}

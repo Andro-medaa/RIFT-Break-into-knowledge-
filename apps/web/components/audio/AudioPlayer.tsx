@@ -3,12 +3,15 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { LessonSegment, MoveType } from '../../types/lesson';
 import { Waveform } from './Waveform';
+import { saveSessionCursor } from '../../lib/storage/indexedDb';
 
 interface AudioPlayerProps {
   segments: LessonSegment[];
   activeSegOrd?: number;
   activeSentIdx?: number;
   sessionId?: string;
+  docId?: string | null;
+  docTitle?: string;
   onActiveSentenceChange: (segOrd: number, sentIdx: number, chunkIds: string[]) => void;
   apiBaseUrl?: string;
 }
@@ -36,6 +39,8 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   activeSegOrd = 0,
   activeSentIdx = 0,
   sessionId,
+  docId,
+  docTitle = 'Document',
   onActiveSentenceChange,
   apiBaseUrl = 'http://localhost:8000',
 }) => {
@@ -57,6 +62,43 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
       setSegIdx(activeSegOrd);
     }
   }, [activeSegOrd, segments.length, segIdx]);
+
+  // Guaranteed flush on page unload or backgrounding
+  useEffect(() => {
+    const flushCursor = () => {
+      if (sessionId && docId) {
+        saveSessionCursor({
+          sessionId,
+          docId,
+          docTitle,
+          segOrd: segIdx,
+          sentIdx: sentIdx,
+          segments,
+          updatedAt: Date.now(),
+        }).catch(() => {});
+
+        fetch(`${apiBaseUrl}/sessions/${sessionId}/cursor`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ seg_ord: segIdx, sent_idx: sentIdx }),
+          keepalive: true,
+        }).catch(() => {});
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        flushCursor();
+      }
+    };
+
+    window.addEventListener('beforeunload', flushCursor);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('beforeunload', flushCursor);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [sessionId, docId, docTitle, segIdx, sentIdx, segments, apiBaseUrl]);
 
   const currentSegment = segments[segIdx] || segments[0];
   const currentSentence = currentSegment?.sentences[sentIdx] || currentSegment?.sentences[0];
@@ -165,6 +207,19 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ seg_ord: targetSeg, sent_idx: targetSent }),
+        }).catch(() => {});
+      }
+
+      // Persist to local IndexedDB for instant tab reload resumption
+      if (sessionId && docId) {
+        saveSessionCursor({
+          sessionId,
+          docId,
+          docTitle,
+          segOrd: targetSeg,
+          sentIdx: targetSent,
+          segments,
+          updatedAt: Date.now(),
         }).catch(() => {});
       }
 
