@@ -1,5 +1,5 @@
+from typing import Optional, List
 from pydantic import BaseModel, Field
-from typing import Optional
 
 class TTSRequest(BaseModel):
     text: str = Field(..., min_length=1, description="Spoken text to synthesize")
@@ -15,3 +15,29 @@ class TTSResponseMeta(BaseModel):
     speed: float
     format: str = "audio/wav"
     audio_base64: Optional[str] = None
+    cache_hit: bool = False
+    engine_used: str = "harmonic-acoustic"
+    cdn_url: Optional[str] = None
+
+class TTSPreloadItem(BaseModel):
+    text: str = Field(..., min_length=1)
+    move: str = Field(default="explain")
+    voice: Optional[str] = Field(default="teacher-charismatic")
+    speed: Optional[float] = Field(default=1.0)
+
+class TTSPreloadRequest(BaseModel):
+    items: List[TTSPreloadItem] = Field(..., min_length=1, description="List of sentences to pre-cache")
+
+class TTSPreloadResponse(BaseModel):
+    preloaded_count: int
+    cache_keys: List[str]
+    total_duration_ms: int
+
+class TTSStatsResponse(BaseModel):
+    total_cached_items: int
+    cache_hits: int
+    cache_misses: int
+    hit_rate: float
+    storage_backend: str
+    gpu_worker_available: bool
+    gpu_worker_url: Optional[str] = None

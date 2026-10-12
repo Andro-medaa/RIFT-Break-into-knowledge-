@@ -3,52 +3,84 @@ import io
 import math
 import struct
 import wave
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 from app.teach.emotion import get_tts_params_for_move
-
-# In-memory audio cache: cache_key -> (audio_bytes, duration_ms)
-AUDIO_CACHE: Dict[str, Tuple[bytes, int]] = {}
+from app.providers.cache import audio_cache_storage
+from app.providers.chatterbox_turbo import chatterbox_turbo_client
 
 SAMPLE_RATE = 24000  # 24 kHz high-fidelity speech sample rate
 
 
-def compute_cache_key(text: str, move: str, voice: str, speed: float) -> str:
+def compute_cache_key(
+    text: str,
+    move: str = "explain",
+    voice: str = "teacher-charismatic",
+    speed: float = 1.0,
+    exaggeration: Optional[float] = None,
+) -> str:
     """Generate deterministic SHA256 cache key for TTS synthesis requests."""
-    payload = f"{text.strip()}:{move.lower()}:{voice.lower()}:{speed:.2f}"
+    clean_text = text.strip()
+    if exaggeration is None:
+        emotion = get_tts_params_for_move(move)
+        exaggeration = float(emotion["exaggeration"])
+
+    payload = f"{clean_text}:{move.lower()}:{voice.lower()}:{speed:.2f}:{exaggeration:.2f}"
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+class TTSSynthesisResult(tuple):
+    """3-tuple subclass holding (wav_bytes, duration_ms, cache_key) with
+    metadata attributes for cache hits, engine used, and public CDN URL.
+    """
+
+    def __new__(
+        cls,
+        wav_bytes: bytes,
+        duration_ms: int,
+        cache_key: str,
+        cache_hit: bool = False,
+        engine: str = "harmonic-acoustic",
+        cdn_url: Optional[str] = None,
+    ):
+        return super().__new__(cls, (wav_bytes, duration_ms, cache_key))
+
+    def __init__(
+        self,
+        wav_bytes: bytes,
+        duration_ms: int,
+        cache_key: str,
+        cache_hit: bool = False,
+        engine: str = "harmonic-acoustic",
+        cdn_url: Optional[str] = None,
+    ):
+        self.wav_bytes = wav_bytes
+        self.duration_ms = duration_ms
+        self.cache_key = cache_key
+        self.cache_hit = cache_hit
+        self.engine = engine
+        self.cdn_url = cdn_url
+
+
 class HarmonicAcousticTTS:
-    """Emotional Narration Engine with pedagogical move modulation.
+    """Emotional Narration Engine with pedagogical move modulation and GPU Turbo integration.
     Synthesizes standard 24kHz 16-bit PCM RIFF WAV audio with harmonic vocal
     formants modulated by pedagogical move exaggeration and pitch parameters.
+    Integrates multi-tiered audio caching (L1 RAM + L2 Disk + L3 R2) and remote
+    GPU Chatterbox-Turbo worker orchestration.
     """
 
     def __init__(self, sample_rate: int = SAMPLE_RATE):
         self.sample_rate = sample_rate
 
-    def synthesize(
+    def _generate_harmonic_wav(
         self,
-        text: str,
-        move: str = "explain",
-        voice: str = "teacher-charismatic",
-        speed: float = 1.0,
-    ) -> Tuple[bytes, int, str]:
-        """Synthesize audio bytes for text, returning (wav_bytes, duration_ms, cache_key).
-        Checks memory cache first for zero-latency retrieval.
-        """
-        clean_text = text.strip()
-        if not clean_text:
-            clean_text = "..."
-
-        cache_key = compute_cache_key(clean_text, move, voice, speed)
-        if cache_key in AUDIO_CACHE:
-            cached_bytes, cached_ms = AUDIO_CACHE[cache_key]
-            return cached_bytes, cached_ms, cache_key
-
-        emotion = get_tts_params_for_move(move)
-        exaggeration = float(emotion["exaggeration"])  # 0.30 to 0.75
-        pitch_scale = float(emotion.get("pitch_scale", 1.0))
+        clean_text: str,
+        move: str,
+        speed: float,
+        exaggeration: float,
+        pitch_scale: float,
+    ) -> Tuple[bytes, int]:
+        """Synthesize harmonic acoustic vocal WAV waveform."""
         speed_factor = max(0.5, min(2.0, float(speed)))
 
         # Pacing: ~155 spoken WPM => ~0.38s per word, scaled by speed
@@ -111,16 +143,98 @@ class HarmonicAcousticTTS:
             packed_frames = struct.pack(f"<{len(samples)}h", *samples)
             wf.writeframes(packed_frames)
 
-        wav_bytes = wav_io.getvalue()
-        AUDIO_CACHE[cache_key] = (wav_bytes, duration_ms)
-        return wav_bytes, duration_ms, cache_key
+        return wav_io.getvalue(), duration_ms
+
+    def synthesize(
+        self,
+        text: str,
+        move: str = "explain",
+        voice: str = "teacher-charismatic",
+        speed: float = 1.0,
+    ) -> TTSSynthesisResult:
+        """Synthesize audio bytes for text, returning TTSSynthesisResult(wav_bytes, duration_ms, cache_key).
+        Checks multi-tiered audio cache first for zero-latency retrieval.
+        Attempts Chatterbox-Turbo GPU synthesis if available, with harmonic acoustic fallback.
+        """
+        clean_text = text.strip()
+        if not clean_text:
+            clean_text = "..."
+
+        emotion = get_tts_params_for_move(move)
+        exaggeration = float(emotion["exaggeration"])  # 0.30 to 0.75
+        pitch_scale = float(emotion.get("pitch_scale", 1.0))
+
+        cache_key = compute_cache_key(clean_text, move, voice, speed, exaggeration)
+
+        # 1. Multi-tiered Cache Lookup (L1 RAM -> L2 Disk -> L3 R2)
+        cached_result = audio_cache_storage.get(cache_key)
+        if cached_result is not None:
+            cached_bytes, cached_ms, source_tier = cached_result
+            cdn_url = None
+            if audio_cache_storage.is_r2_configured:
+                cdn_url = f"https://{audio_cache_storage.cache_dir.name}/{cache_key}.wav"
+            return TTSSynthesisResult(
+                cached_bytes,
+                cached_ms,
+                cache_key,
+                cache_hit=True,
+                engine=f"cache-{source_tier}",
+                cdn_url=cdn_url,
+            )
+
+        # 2. Try Chatterbox-Turbo (350M, GPU-accelerated) worker
+        engine_name = "harmonic-acoustic"
+        gpu_result = chatterbox_turbo_client.synthesize(
+            text=clean_text,
+            move=move,
+            voice=voice,
+            speed=speed,
+            exaggeration=exaggeration,
+        )
+
+        if gpu_result is not None:
+            wav_bytes, duration_ms = gpu_result
+            engine_name = "chatterbox-turbo"
+        else:
+            # 3. Fallback to Local Harmonic Vocal Formant Synthesis
+            wav_bytes, duration_ms = self._generate_harmonic_wav(
+                clean_text=clean_text,
+                move=move,
+                speed=speed,
+                exaggeration=exaggeration,
+                pitch_scale=pitch_scale,
+            )
+
+        # 4. Cache generated audio across storage tiers
+        _, cdn_url = audio_cache_storage.put(
+            cache_key=cache_key,
+            wav_bytes=wav_bytes,
+            duration_ms=duration_ms,
+            text=clean_text,
+            move=move,
+            voice=voice,
+            speed=speed,
+            exaggeration=exaggeration,
+        )
+
+        return TTSSynthesisResult(
+            wav_bytes,
+            duration_ms,
+            cache_key,
+            cache_hit=False,
+            engine=engine_name,
+            cdn_url=cdn_url,
+        )
 
 
-# Singleton instance
+# Singleton engine instance
 tts_engine = HarmonicAcousticTTS()
+
+# Direct dictionary view alias for legacy tests and references
+AUDIO_CACHE = audio_cache_storage._memory_cache
 
 
 def prewarm_tts() -> None:
-    """Pre-warm TTS engine on FastAPI startup to eliminate cold-start latency."""
+    """Pre-warm TTS engine and cache on FastAPI startup to eliminate cold-start latency."""
     sample_phrase = "Welcome to your intelligent lesson."
     tts_engine.synthesize(sample_phrase, move="intro", speed=1.0)
