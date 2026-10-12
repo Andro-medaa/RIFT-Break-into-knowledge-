@@ -1,15 +1,24 @@
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 import fitz
-from fastapi import APIRouter, File, UploadFile, HTTPException, Query, status
+from fastapi import APIRouter, File, UploadFile, HTTPException, Query, Depends, status
 from pydantic import BaseModel, Field
 
 from app.schemas.response import ApiResponse
 from app.schemas.document import DocumentChunk, DocumentMeta
 from app.ingest.parse import parse_pdf_bytes, DocumentParsed
 from app.search.hybrid import GLOBAL_SEARCH_ENGINE, SearchResponse, SearchMode
+from app.core.auth import get_current_user, User
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+
+def verify_document_access(doc: DocumentParsed, user: User) -> None:
+    """Enforce multi-tenant document isolation (Step 12)."""
+    if doc.owner_id is not None and doc.owner_id != user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access forbidden: you do not have permission to access this document.",
+        )
 
 class SearchRequestPayload(BaseModel):
     query: str = Field(..., min_length=1, description="Search query string")
@@ -68,7 +77,10 @@ def create_and_ingest_sample() -> ApiResponse[DocumentMeta]:
 
 
 @router.post("", response_model=ApiResponse[DocumentMeta], status_code=status.HTTP_201_CREATED)
-async def upload_document(file: UploadFile = File(...)) -> ApiResponse[DocumentMeta]:
+async def upload_document(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+) -> ApiResponse[DocumentMeta]:
     """Upload a PDF document, synchronously parse text blocks and normalized bounding boxes,
     and return document metadata.
     """
@@ -93,11 +105,13 @@ async def upload_document(file: UploadFile = File(...)) -> ApiResponse[DocumentM
             detail=f"Failed to parse PDF document: {str(exc)}",
         )
 
+    parsed.owner_id = current_user.id if not current_user.is_guest else None
     DOCUMENTS_STORE[parsed.doc_id] = parsed
     GLOBAL_SEARCH_ENGINE.index_document(parsed.doc_id, parsed.chunks)
 
     meta = DocumentMeta(
         id=parsed.doc_id,
+        owner_id=parsed.owner_id,
         title=parsed.title,
         page_count=parsed.page_count,
         chunks_count=len(parsed.chunks),
@@ -112,8 +126,8 @@ async def upload_document(file: UploadFile = File(...)) -> ApiResponse[DocumentM
     )
 
 @router.get("/{doc_id}", response_model=ApiResponse[DocumentMeta])
-def get_document(doc_id: str) -> ApiResponse[DocumentMeta]:
-    """Retrieve document metadata by document ID."""
+def get_document(doc_id: str, current_user: User = Depends(get_current_user)) -> ApiResponse[DocumentMeta]:
+    """Retrieve document metadata by document ID with multi-tenant access control."""
     parsed = DOCUMENTS_STORE.get(doc_id)
     if not parsed:
         raise HTTPException(
@@ -121,8 +135,11 @@ def get_document(doc_id: str) -> ApiResponse[DocumentMeta]:
             detail=f"Document '{doc_id}' not found.",
         )
 
+    verify_document_access(parsed, current_user)
+
     meta = DocumentMeta(
         id=parsed.doc_id,
+        owner_id=parsed.owner_id,
         title=parsed.title,
         page_count=parsed.page_count,
         chunks_count=len(parsed.chunks),
@@ -135,6 +152,7 @@ def get_document(doc_id: str) -> ApiResponse[DocumentMeta]:
 def get_document_chunks(
     doc_id: str,
     page_no: Optional[int] = Query(None, description="Filter chunks by 1-indexed page number", ge=1),
+    current_user: User = Depends(get_current_user),
 ) -> ApiResponse[List[DocumentChunk]]:
     """Retrieve parsed pedagogical chunks with normalized bounding boxes."""
     parsed = DOCUMENTS_STORE.get(doc_id)
@@ -143,6 +161,8 @@ def get_document_chunks(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Document '{doc_id}' not found.",
         )
+
+    verify_document_access(parsed, current_user)
 
     chunks = parsed.chunks
     if page_no is not None:
@@ -155,7 +175,11 @@ def get_document_chunks(
     )
 
 @router.post("/{doc_id}/search", response_model=ApiResponse[SearchResponse])
-def search_document(doc_id: str, payload: SearchRequestPayload) -> ApiResponse[SearchResponse]:
+def search_document(
+    doc_id: str,
+    payload: SearchRequestPayload,
+    current_user: User = Depends(get_current_user),
+) -> ApiResponse[SearchResponse]:
     """Step 11: Execute hybrid search combining BM25 keyword and 768-dim vector embeddings with RRF."""
     parsed = DOCUMENTS_STORE.get(doc_id)
     if not parsed:
@@ -163,6 +187,8 @@ def search_document(doc_id: str, payload: SearchRequestPayload) -> ApiResponse[S
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Document '{doc_id}' not found.",
         )
+
+    verify_document_access(parsed, current_user)
 
     # Ensure document is indexed
     if doc_id not in GLOBAL_SEARCH_ENGINE.doc_chunks:

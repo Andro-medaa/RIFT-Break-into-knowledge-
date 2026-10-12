@@ -12,6 +12,7 @@ class DocumentParsed:
     title: str
     page_count: int
     chunks: List[DocumentChunk]
+    owner_id: Optional[str] = None
 
 def clean_extracted_text(text: str) -> str:
     """Clean text by recombining hyphenated words across line wraps and normalizing whitespace."""

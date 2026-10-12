@@ -22,6 +22,7 @@ class DocumentChunk(BaseModel):
 
 class DocumentMeta(BaseModel):
     id: str
+    owner_id: Optional[str] = None
     title: str
     page_count: int
     chunks_count: int
