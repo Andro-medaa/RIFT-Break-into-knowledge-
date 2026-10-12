@@ -18,7 +18,7 @@ class DocumentChunk(BaseModel):
     rects: List[NormalizedRect]
     kind: str = "paragraph"  # heading | paragraph | figure_caption | table
     text: str
-    word_count: int
+    word_count: int = 0
 
 class DocumentMeta(BaseModel):
     id: str
@@ -27,3 +27,8 @@ class DocumentMeta(BaseModel):
     chunks_count: int
     status: str = "parsed"
     created_at: str
+
+# Type aliases for convenient usage across modules
+Chunk = DocumentChunk
+BoundingBox = NormalizedRect
+

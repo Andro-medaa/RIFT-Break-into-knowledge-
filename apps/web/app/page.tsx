@@ -58,7 +58,7 @@ export default function Home() {
       <header className="app-header">
         <div className="brand-badge">
           <span className="badge-dot" />
-          RIFT Monorepo // Step 2 PDF & Highlights Active
+          RIFT Monorepo // Step 5 Gemini Lesson Planner Active
         </div>
         <h1 className="app-title">
           <span className="gradient-text">RIFT</span> — AI Teacher PDF Narrator

@@ -4,6 +4,7 @@ import React, { useState, useMemo, useEffect, useRef } from "react";
 import { HighlightLayer } from "./HighlightLayer";
 import { MiniMap } from "./MiniMap";
 import { ChunkNavigator } from "./ChunkNavigator";
+import { LessonPlanView } from "../teach/LessonPlanView";
 import { SAMPLE_PAGES, SAMPLE_HIGHLIGHTS } from "./SamplePdfData";
 import { HighlightItem } from "@/types/pdf";
 import type { DocumentChunk, DocumentMeta } from "@/types/api";
@@ -19,6 +20,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ parsedChunks, documentMeta
   const [spotlightMode, setSpotlightMode] = useState<boolean>(false);
   const [activeHighlightId, setActiveHighlightId] = useState<string | null>("h1-title");
   const [coveredIds, setCoveredIds] = useState<Set<string>>(new Set(["h1-title"]));
+  const [rightTab, setRightTab] = useState<"chunks" | "lesson">("lesson");
   const stageRef = useRef<HTMLDivElement>(null);
 
   const highlights: HighlightItem[] = useMemo(() => {
@@ -209,7 +211,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ parsedChunks, documentMeta
               fontFamily: "var(--font-mono)",
             }}
           >
-            <span>✓</span> Step 4 Sync Active
+            <span>✓</span> Step 5 AI Lesson Planner Active
           </div>
         </div>
       </div>
@@ -288,15 +290,100 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ parsedChunks, documentMeta
           </div>
         </div>
 
-        {/* Column 3: Right Chunk Roadmap Navigator */}
-        <ChunkNavigator
-          highlights={highlights}
-          activeHighlightId={activeHighlightId}
-          coveredIds={coveredIds}
-          currentPage={currentPage}
-          onSelectHighlight={handleSelectChunk}
-          onToggleCovered={handleToggleCovered}
-        />
+        {/* Column 3: Right Column with Tabs (Roadmap vs Lesson Plan) */}
+        <div
+          style={{
+            width: "360px",
+            display: "flex",
+            flexDirection: "column",
+            height: "100%",
+            background: "rgba(15, 23, 42, 0.6)",
+            borderLeft: "1px solid rgba(255, 255, 255, 0.08)",
+          }}
+        >
+          {/* Tab Switcher Header */}
+          <div
+            style={{
+              display: "flex",
+              borderBottom: "1px solid rgba(255, 255, 255, 0.08)",
+              background: "rgba(15, 23, 42, 0.8)",
+            }}
+          >
+            <button
+              id="tab-lesson"
+              type="button"
+              onClick={() => setRightTab("lesson")}
+              style={{
+                flex: 1,
+                padding: "10px 14px",
+                border: "none",
+                background: rightTab === "lesson" ? "rgba(56, 189, 248, 0.12)" : "transparent",
+                borderBottom: rightTab === "lesson" ? "2px solid #38bdf8" : "2px solid transparent",
+                color: rightTab === "lesson" ? "#38bdf8" : "#94a3b8",
+                fontWeight: 600,
+                fontSize: "12px",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "6px",
+                transition: "all 0.15s ease",
+              }}
+            >
+              <span>🎓</span> Lesson Plan
+            </button>
+            <button
+              id="tab-roadmap"
+              type="button"
+              onClick={() => setRightTab("chunks")}
+              style={{
+                flex: 1,
+                padding: "10px 14px",
+                border: "none",
+                background: rightTab === "chunks" ? "rgba(56, 189, 248, 0.12)" : "transparent",
+                borderBottom: rightTab === "chunks" ? "2px solid #38bdf8" : "2px solid transparent",
+                color: rightTab === "chunks" ? "#38bdf8" : "#94a3b8",
+                fontWeight: 600,
+                fontSize: "12px",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "6px",
+                transition: "all 0.15s ease",
+              }}
+            >
+              <span>🗺️</span> Chunk Roadmap
+            </button>
+          </div>
+
+          {/* Tab Content */}
+          <div style={{ flex: 1, overflow: "hidden" }}>
+            {rightTab === "lesson" ? (
+              <LessonPlanView
+                docId={documentMeta ? documentMeta.id : null}
+                docTitle={documentMeta ? documentMeta.title : undefined}
+                chunks={parsedChunks || []}
+                activeChunkId={activeHighlightId}
+                onSelectChunk={(cId) => {
+                  const h = highlights.find((item) => item.id === cId);
+                  if (h) {
+                    handleSelectChunk(cId, h.pageNo);
+                  }
+                }}
+              />
+            ) : (
+              <ChunkNavigator
+                highlights={highlights}
+                activeHighlightId={activeHighlightId}
+                coveredIds={coveredIds}
+                currentPage={currentPage}
+                onSelectHighlight={handleSelectChunk}
+                onToggleCovered={handleToggleCovered}
+              />
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
