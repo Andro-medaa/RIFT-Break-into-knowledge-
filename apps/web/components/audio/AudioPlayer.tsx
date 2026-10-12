@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { LessonSegment, MoveType } from '../../types/lesson';
 import { Waveform } from './Waveform';
 import { saveSessionCursor } from '../../lib/storage/indexedDb';
+import confetti from 'canvas-confetti';
 
 interface AudioPlayerProps {
   segments: LessonSegment[];
@@ -247,6 +248,21 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           playSentence(targetSeg + 1, 0, speedMultiplier);
         } else {
           setIsPlaying(false);
+          // Step 10: Chapter milestone celebration!
+          try {
+            confetti({
+              particleCount: 120,
+              spread: 80,
+              origin: { y: 0.6 },
+              colors: ['#38bdf8', '#818cf8', '#34d399', '#f59e0b', '#ec4899'],
+            });
+            setTimeout(() => {
+              confetti({ particleCount: 60, angle: 60, spread: 55, origin: { x: 0 } });
+              confetti({ particleCount: 60, angle: 120, spread: 55, origin: { x: 1 } });
+            }, 300);
+          } catch {
+            // Ignore in headless / test
+          }
         }
       };
 

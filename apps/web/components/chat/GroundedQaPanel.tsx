@@ -47,6 +47,21 @@ export const GroundedQaPanel: React.FC<GroundedQaPanelProps> = ({
     scrollToBottom();
   }, [messages]);
 
+  // Step 10: Stop Q&A audio/bridge immediately on client-side barge-in
+  useEffect(() => {
+    const handleBargeIn = () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+      setAudioLoadingId(null);
+      setIsBridgePlaying(false);
+    };
+
+    window.addEventListener('rift:barge-in', handleBargeIn);
+    return () => window.removeEventListener('rift:barge-in', handleBargeIn);
+  }, []);
+
   // Handle incoming questions (either from input or initial voice barge-in)
   const askQuestion = useCallback(
     async (questionText: string) => {
@@ -249,6 +264,47 @@ export const GroundedQaPanel: React.FC<GroundedQaPanelProps> = ({
     }
   };
 
+  const [isBridgePlaying, setIsBridgePlaying] = useState<boolean>(false);
+
+  // Step 10: Conversational bridge line before resuming lesson
+  const handleResumeWithBridge = async () => {
+    if (!onResumeLesson) return;
+    setIsBridgePlaying(true);
+
+    try {
+      const bridgeText = 'Alright, returning to where we left off in the lesson.';
+      const res = await fetch(`${apiBaseUrl}/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: bridgeText, move: 'intro', speed: 1.05 }),
+      });
+
+      if (res.ok) {
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audioRef.current = audio;
+
+        audio.onended = () => {
+          setIsBridgePlaying(false);
+          onResumeLesson();
+        };
+        audio.onerror = () => {
+          setIsBridgePlaying(false);
+          onResumeLesson();
+        };
+
+        await audio.play();
+        return;
+      }
+    } catch {
+      // Fallback
+    }
+
+    setIsBridgePlaying(false);
+    onResumeLesson();
+  };
+
   return (
     <div
       id="grounded-qa-panel"
@@ -288,7 +344,8 @@ export const GroundedQaPanel: React.FC<GroundedQaPanelProps> = ({
           <button
             id="btn-qa-resume-lesson"
             type="button"
-            onClick={onResumeLesson}
+            onClick={handleResumeWithBridge}
+            disabled={isBridgePlaying}
             style={{
               padding: '6px 12px',
               borderRadius: '6px',
@@ -297,13 +354,13 @@ export const GroundedQaPanel: React.FC<GroundedQaPanelProps> = ({
               color: '#34d399',
               fontSize: '11px',
               fontWeight: 600,
-              cursor: 'pointer',
+              cursor: isBridgePlaying ? 'wait' : 'pointer',
               display: 'flex',
               alignItems: 'center',
               gap: '4px',
             }}
           >
-            <span>▶</span> Resume Lesson
+            <span>{isBridgePlaying ? '🎙️ Bridging...' : '▶ Resume Lesson'}</span>
           </button>
         )}
       </div>

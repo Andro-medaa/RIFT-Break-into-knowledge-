@@ -94,7 +94,7 @@ export default function Home() {
       <header className="app-header">
         <div className="brand-badge">
           <span className="badge-dot" />
-          RIFT Monorepo // Step 9 Dual-Grounded Q&A Active
+          RIFT Monorepo // Step 10 Prototype Complete • Seamless Loop Active
         </div>
         <h1 className="app-title">
           <span className="gradient-text">RIFT</span> — AI Teacher PDF Narrator
