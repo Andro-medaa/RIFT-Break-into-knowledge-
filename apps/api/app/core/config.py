@@ -17,6 +17,7 @@ class Settings:
         "*",
     ]
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "").strip()
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "").strip()
 
 settings = Settings()
 

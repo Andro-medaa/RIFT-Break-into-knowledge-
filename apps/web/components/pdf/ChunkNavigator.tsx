@@ -21,10 +21,19 @@ export const ChunkNavigator: React.FC<ChunkNavigatorProps> = ({
   onToggleCovered,
 }) => {
   const [filterCurrentPage, setFilterCurrentPage] = useState<boolean>(false);
+  const [searchQuery, setSearchQuery] = useState<string>("");
 
-  const displayedHighlights = filterCurrentPage
-    ? highlights.filter((h) => h.pageNo === currentPage)
-    : highlights;
+  const displayedHighlights = highlights.filter((h) => {
+    if (filterCurrentPage && h.pageNo !== currentPage) return false;
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      return (
+        Boolean(h.text && h.text.toLowerCase().includes(q)) ||
+        Boolean(h.label && h.label.toLowerCase().includes(q))
+      );
+    }
+    return true;
+  });
 
   const totalCount = highlights.length;
   const coveredCount = highlights.filter((h) => coveredIds.has(h.id)).length;
@@ -104,6 +113,28 @@ export const ChunkNavigator: React.FC<ChunkNavigatorProps> = ({
           >
             Page {currentPage} Only
           </button>
+        </div>
+
+        {/* Step 11: Hybrid Chunk Search Bar */}
+        <div style={{ marginTop: "10px" }}>
+          <input
+            id="input-chunk-search"
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="🔍 Search chunks (Hybrid/BM25)..."
+            style={{
+              width: "100%",
+              padding: "6px 10px",
+              borderRadius: "4px",
+              background: "rgba(255, 255, 255, 0.06)",
+              border: "1px solid rgba(255, 255, 255, 0.12)",
+              color: "#f8fafc",
+              fontSize: "0.75rem",
+              outline: "none",
+              boxSizing: "border-box",
+            }}
+          />
         </div>
       </div>
 

@@ -2,12 +2,19 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 import fitz
 from fastapi import APIRouter, File, UploadFile, HTTPException, Query, status
+from pydantic import BaseModel, Field
 
 from app.schemas.response import ApiResponse
 from app.schemas.document import DocumentChunk, DocumentMeta
 from app.ingest.parse import parse_pdf_bytes, DocumentParsed
+from app.search.hybrid import GLOBAL_SEARCH_ENGINE, SearchResponse, SearchMode
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+
+class SearchRequestPayload(BaseModel):
+    query: str = Field(..., min_length=1, description="Search query string")
+    limit: int = Field(5, ge=1, le=50, description="Max number of hits")
+    mode: SearchMode = Field("hybrid", description="Search mode: hybrid, vector, or bm25")
 
 # In-memory document storage for prototype
 DOCUMENTS_STORE: Dict[str, DocumentParsed] = {}
@@ -43,6 +50,7 @@ def create_and_ingest_sample() -> ApiResponse[DocumentMeta]:
 
     parsed = parse_pdf_bytes(pdf_bytes, filename="Geometry_of_Deep_Learning.pdf")
     DOCUMENTS_STORE[parsed.doc_id] = parsed
+    GLOBAL_SEARCH_ENGINE.index_document(parsed.doc_id, parsed.chunks)
 
     meta = DocumentMeta(
         id=parsed.doc_id,
@@ -86,6 +94,7 @@ async def upload_document(file: UploadFile = File(...)) -> ApiResponse[DocumentM
         )
 
     DOCUMENTS_STORE[parsed.doc_id] = parsed
+    GLOBAL_SEARCH_ENGINE.index_document(parsed.doc_id, parsed.chunks)
 
     meta = DocumentMeta(
         id=parsed.doc_id,
@@ -143,4 +152,31 @@ def get_document_chunks(
         success=True,
         data=chunks,
         message=f"Retrieved {len(chunks)} chunks.",
+    )
+
+@router.post("/{doc_id}/search", response_model=ApiResponse[SearchResponse])
+def search_document(doc_id: str, payload: SearchRequestPayload) -> ApiResponse[SearchResponse]:
+    """Step 11: Execute hybrid search combining BM25 keyword and 768-dim vector embeddings with RRF."""
+    parsed = DOCUMENTS_STORE.get(doc_id)
+    if not parsed:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document '{doc_id}' not found.",
+        )
+
+    # Ensure document is indexed
+    if doc_id not in GLOBAL_SEARCH_ENGINE.doc_chunks:
+        GLOBAL_SEARCH_ENGINE.index_document(doc_id, parsed.chunks)
+
+    results = GLOBAL_SEARCH_ENGINE.search(
+        doc_id=doc_id,
+        query=payload.query,
+        limit=payload.limit,
+        mode=payload.mode,
+    )
+
+    return ApiResponse(
+        success=True,
+        data=results,
+        message=f"Found {len(results.hits)} matches using {payload.mode} search.",
     )
