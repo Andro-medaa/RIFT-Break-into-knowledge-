@@ -1,7 +1,9 @@
 "use client";
 
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import { HighlightLayer } from "./HighlightLayer";
+import { MiniMap } from "./MiniMap";
+import { ChunkNavigator } from "./ChunkNavigator";
 import { SAMPLE_PAGES, SAMPLE_HIGHLIGHTS } from "./SamplePdfData";
 import { HighlightItem } from "@/types/pdf";
 import type { DocumentChunk, DocumentMeta } from "@/types/api";
@@ -16,6 +18,8 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ parsedChunks, documentMeta
   const [zoom, setZoom] = useState<number>(1.0);
   const [spotlightMode, setSpotlightMode] = useState<boolean>(false);
   const [activeHighlightId, setActiveHighlightId] = useState<string | null>("h1-title");
+  const [coveredIds, setCoveredIds] = useState<Set<string>>(new Set(["h1-title"]));
+  const stageRef = useRef<HTMLDivElement>(null);
 
   const highlights: HighlightItem[] = useMemo(() => {
     if (!parsedChunks || parsedChunks.length === 0) {
@@ -35,12 +39,49 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ parsedChunks, documentMeta
   const activePageData = SAMPLE_PAGES.find((p) => p.pageNo === currentPage) || SAMPLE_PAGES[0];
   const pageHighlights = highlights.filter((h) => h.pageNo === currentPage);
 
-  // When highlights or page change, set active highlight
+  // When document chunks change, initialize active and covered IDs
   useEffect(() => {
-    if (pageHighlights.length > 0) {
-      setActiveHighlightId(pageHighlights[0].id);
+    if (highlights.length > 0) {
+      setActiveHighlightId(highlights[0].id);
+      setCoveredIds(new Set([highlights[0].id]));
+      setCurrentPage(highlights[0].pageNo);
     }
-  }, [currentPage, highlights]);
+  }, [highlights]);
+
+  // Synchronized Chunk Selection with Smooth Auto-Scroll
+  const handleSelectChunk = (id: string, pageNo: number) => {
+    if (pageNo !== currentPage) {
+      setCurrentPage(pageNo);
+    }
+    setActiveHighlightId(id);
+
+    // Auto mark as covered when visited
+    setCoveredIds((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+
+    // Auto-scroll PDF stage smoothly to center the selected highlight
+    setTimeout(() => {
+      const el = document.getElementById(`highlight-${id}`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center", inline: "nearest" });
+      }
+    }, 60);
+  };
+
+  const handleToggleCovered = (id: string) => {
+    setCoveredIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
 
   // Zoom handlers
   const handleZoomIn = () => {
@@ -168,92 +209,94 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ parsedChunks, documentMeta
               fontFamily: "var(--font-mono)",
             }}
           >
-            <span>✓</span> {parsedChunks && parsedChunks.length > 0 ? "PyMuPDF Live Coordinates" : "Normalized Scale Lock"}
+            <span>✓</span> Step 4 Sync Active
           </div>
         </div>
       </div>
 
-      {/* Highlights Bar for Active Page */}
-      <div
-        style={{
-          padding: "10px 24px",
-          background: "rgba(13, 17, 27, 0.9)",
-          borderBottom: "1px solid var(--border-subtle)",
-          display: "flex",
-          alignItems: "center",
-          gap: "10px",
-          overflowX: "auto",
-        }}
-      >
-        <span style={{ fontSize: "0.78rem", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 700 }}>
-          Page {currentPage} Highlights ({pageHighlights.length}):
-        </span>
-        {pageHighlights.map((hl) => {
-          const isActive = hl.id === activeHighlightId;
-          return (
-            <button
-              key={hl.id}
-              id={`select-hl-${hl.id}`}
-              onClick={() => setActiveHighlightId(hl.id)}
-              style={{
-                padding: "4px 10px",
-                borderRadius: "var(--radius-sm)",
-                border: `1px solid ${isActive ? "var(--accent-cyan)" : "var(--border-subtle)"}`,
-                background: isActive ? "rgba(6, 182, 212, 0.2)" : "rgba(255, 255, 255, 0.04)",
-                color: isActive ? "#67e8f9" : "var(--text-secondary)",
-                fontSize: "0.78rem",
-                fontWeight: 600,
-                cursor: "pointer",
-                whiteSpace: "nowrap",
-                transition: "all 0.15s ease",
-              }}
-            >
-              {hl.label || hl.id}
-            </button>
-          );
-        })}
-      </div>
+      {/* 3-Column Workspace: MiniMap | PDF Stage | ChunkNavigator */}
+      <div style={{ display: "flex", width: "100%", height: "760px", overflow: "hidden" }}>
+        {/* Column 1: Mini-Map Sidebar Strip */}
+        <MiniMap
+          totalPages={totalPages}
+          currentPage={currentPage}
+          highlights={highlights}
+          activeHighlightId={activeHighlightId}
+          coveredIds={coveredIds}
+          onSelectPage={(pNo) => {
+            setCurrentPage(pNo);
+            const firstOnPage = highlights.find((h) => h.pageNo === pNo);
+            if (firstOnPage) {
+              handleSelectChunk(firstOnPage.id, pNo);
+            }
+          }}
+        />
 
-      {/* Main Viewport / Stage */}
-      <div className="pdf-stage" id="pdf-stage">
-        {/* Scaled PDF Page Sheet */}
+        {/* Column 2: Center PDF Stage Viewport */}
         <div
-          id="pdf-page-wrapper"
-          className="pdf-page-wrapper"
+          ref={stageRef}
+          className="pdf-stage"
+          id="pdf-stage"
           style={{
-            width: "680px",
-            height: "920px",
-            transform: `scale(${zoom})`,
+            flex: 1,
+            overflow: "auto",
+            display: "flex",
+            justifyContent: "center",
+            padding: "32px 24px",
+            background: "radial-gradient(circle at 50% 25%, rgba(15, 23, 42, 0.98), #030712)",
           }}
         >
-          {/* Normalized Highlight Layer Overlaid onto Page */}
-          <HighlightLayer
-            highlights={highlights}
-            pageNo={currentPage}
-            spotlightMode={spotlightMode}
-            activeHighlightId={activeHighlightId}
-            onSelectHighlight={(id) => setActiveHighlightId(id)}
-          />
+          {/* Scaled PDF Page Sheet */}
+          <div
+            id="pdf-page-wrapper"
+            className="pdf-page-wrapper"
+            style={{
+              width: "680px",
+              height: "920px",
+              transform: `scale(${zoom})`,
+              transformOrigin: "top center",
+              transition: "transform 0.2s cubic-bezier(0.16, 1, 0.3, 1)",
+            }}
+          >
+            {/* Normalized Highlight Layer Overlaid onto Page */}
+            <HighlightLayer
+              highlights={highlights}
+              pageNo={currentPage}
+              spotlightMode={spotlightMode}
+              activeHighlightId={activeHighlightId}
+              onSelectHighlight={(id) => handleSelectChunk(id, currentPage)}
+            />
 
-          {/* Rendered Page Content (Document Text Sheet) */}
-          <div className="pdf-page-content" id="pdf-rendered-page">
-            <h2 className="pdf-doc-title">{documentMeta ? documentMeta.title : activePageData.title}</h2>
-            <div className="pdf-doc-subtitle">
-              {documentMeta ? `Page ${currentPage} of ${totalPages} • Ingested via PyMuPDF` : activePageData.subtitle}
-            </div>
+            {/* Rendered Page Content (Document Text Sheet) */}
+            <div className="pdf-page-content" id="pdf-rendered-page">
+              <h2 className="pdf-doc-title">{documentMeta ? documentMeta.title : activePageData.title}</h2>
+              <div className="pdf-doc-subtitle">
+                {documentMeta ? `Page ${currentPage} of ${totalPages} • Synchronized Navigation Active` : activePageData.subtitle}
+              </div>
 
-            {activePageData.paragraphs.map((p, idx) => (
-              <p key={idx} className="pdf-doc-paragraph">
-                {p}
-              </p>
-            ))}
+              {activePageData.paragraphs.map((p, idx) => (
+                <p key={idx} className="pdf-doc-paragraph">
+                  {p}
+                </p>
+              ))}
 
-            <div className="pdf-page-footer">
-              <span>{documentMeta ? `Document ID: ${documentMeta.id}` : "RIFT Technical Specification — Foundation Series"}</span>
-              <span>Page {currentPage} / {totalPages}</span>
+              <div className="pdf-page-footer">
+                <span>{documentMeta ? `Document ID: ${documentMeta.id}` : "RIFT Technical Specification — Foundation Series"}</span>
+                <span>Page {currentPage} / {totalPages}</span>
+              </div>
             </div>
           </div>
         </div>
+
+        {/* Column 3: Right Chunk Roadmap Navigator */}
+        <ChunkNavigator
+          highlights={highlights}
+          activeHighlightId={activeHighlightId}
+          coveredIds={coveredIds}
+          currentPage={currentPage}
+          onSelectHighlight={handleSelectChunk}
+          onToggleCovered={handleToggleCovered}
+        />
       </div>
     </div>
   );

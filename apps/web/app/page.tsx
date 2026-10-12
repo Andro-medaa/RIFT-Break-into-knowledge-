@@ -272,7 +272,7 @@ export default function Home() {
 
       {/* Footer */}
       <footer className="app-footer">
-        RIFT — Intelligent PDF Dictator & AI Teacher Monorepo • Next Step: Step 3 (PyMuPDF Ingestion Engine)
+        RIFT — Intelligent PDF Dictator & AI Teacher Monorepo • Phase A Foundation Complete • Next: Phase B Teacher Core (Step 5: Lesson Planner)
       </footer>
     </main>
   );
