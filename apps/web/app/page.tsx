@@ -5,6 +5,7 @@ import type { ApiResponse, PingData, DocumentMeta, DocumentChunk } from "../type
 import { PdfViewer } from "../components/pdf/PdfViewer";
 import { PdfIngestionBar } from "../components/pdf/PdfIngestionBar";
 import { ResumeSessionBanner } from "../components/teach/ResumeSessionBanner";
+import { VoiceBargeInBar } from "../components/voice/VoiceBargeInBar";
 import type { SavedSessionData } from "../lib/storage/indexedDb";
 
 export default function Home() {
@@ -92,7 +93,7 @@ export default function Home() {
       <header className="app-header">
         <div className="brand-badge">
           <span className="badge-dot" />
-          RIFT Monorepo // Step 7 Cursor & Persistence Active
+          RIFT Monorepo // Step 8 Client-Side Voice Barge-In Active
         </div>
         <h1 className="app-title">
           <span className="gradient-text">RIFT</span> — AI Teacher PDF Narrator
@@ -191,6 +192,24 @@ export default function Home() {
             {activeDocMeta ? `PyMuPDF: ${parsedChunks.length} Chunks Loaded` : "Contract: [x0, y0, x1, y1] (0..1 Fractions)"}
           </span>
         </div>
+
+        {/* Step 8: Client-Side Barge-In & Push-to-Talk Voice Bar */}
+        <VoiceBargeInBar
+          onBargeIn={() => {
+            if (typeof window !== "undefined") {
+              window.dispatchEvent(new CustomEvent("rift:barge-in"));
+            }
+          }}
+          onQuestionSubmit={(q) => {
+            console.log("Student question submitted:", q);
+          }}
+          onResumeLesson={() => {
+            if (typeof window !== "undefined") {
+              window.dispatchEvent(new CustomEvent("rift:resume-lesson"));
+            }
+          }}
+        />
+
         <PdfViewer
           parsedChunks={parsedChunks}
           documentMeta={activeDocMeta}

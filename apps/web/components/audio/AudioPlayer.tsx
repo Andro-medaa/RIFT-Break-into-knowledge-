@@ -271,6 +271,25 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     ]
   );
 
+  // Listen for global barge-in interruption events (<50ms instantaneous client-side mute)
+  useEffect(() => {
+    const handleBargeIn = () => {
+      stopCurrentAudio();
+      setIsPlaying(false);
+    };
+    const handleResume = () => {
+      // Resume playback at saved cursor
+      playSentence(segIdx, sentIdx, speed);
+    };
+
+    window.addEventListener('rift:barge-in', handleBargeIn);
+    window.addEventListener('rift:resume-lesson', handleResume);
+    return () => {
+      window.removeEventListener('rift:barge-in', handleBargeIn);
+      window.removeEventListener('rift:resume-lesson', handleResume);
+    };
+  }, [stopCurrentAudio, playSentence, segIdx, sentIdx, speed]);
+
   const handleTogglePlay = () => {
     if (isPlaying) {
       stopCurrentAudio();
