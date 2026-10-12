@@ -211,7 +211,7 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ parsedChunks, documentMeta
               fontFamily: "var(--font-mono)",
             }}
           >
-            <span>✓</span> Step 5 AI Lesson Planner Active
+            <span>✓</span> Step 6 Emotional TTS Narration Active
           </div>
         </div>
       </div>

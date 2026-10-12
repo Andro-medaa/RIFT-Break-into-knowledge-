@@ -3,6 +3,7 @@
 import React, { useState } from 'react';
 import { LessonSegment, MoveType, ReadingSession } from '../../types/lesson';
 import { DocumentChunk } from '../../types/api';
+import { AudioPlayer } from '../audio/AudioPlayer';
 
 interface LessonPlanViewProps {
   docId: string | null;
@@ -71,6 +72,8 @@ export const LessonPlanView: React.FC<LessonPlanViewProps> = ({
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedSegId, setExpandedSegId] = useState<string | null>(null);
+  const [activeSpokenSeg, setActiveSpokenSeg] = useState<number>(0);
+  const [activeSpokenSent, setActiveSpokenSent] = useState<number>(0);
 
   const totalEstDurationMs = segments.reduce((sum, seg) => {
     return sum + seg.sentences.reduce((sSum, s) => sSum + s.duration_estimate_ms, 0);
@@ -238,6 +241,7 @@ export const LessonPlanView: React.FC<LessonPlanViewProps> = ({
         id="lesson-segments-list"
         style={{
           flex: 1,
+          minHeight: 0,
           overflowY: 'auto',
           padding: '12px',
           display: 'flex',
@@ -439,6 +443,24 @@ export const LessonPlanView: React.FC<LessonPlanViewProps> = ({
           );
         })}
       </div>
+
+      {/* Step 6: Emotional Narration Engine (Web Audio Transport Bar) */}
+      {segments.length > 0 && (
+        <AudioPlayer
+          segments={segments}
+          sessionId={session ? session.id : undefined}
+          activeSegOrd={activeSpokenSeg}
+          activeSentIdx={activeSpokenSent}
+          onActiveSentenceChange={(sOrd, sIdx, chunkIds) => {
+            setActiveSpokenSeg(sOrd);
+            setActiveSpokenSent(sIdx);
+            if (chunkIds && chunkIds.length > 0) {
+              onSelectChunk(chunkIds[0]);
+            }
+          }}
+          apiBaseUrl={apiBaseUrl}
+        />
+      )}
     </div>
   );
 };

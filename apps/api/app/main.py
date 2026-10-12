@@ -6,6 +6,8 @@ from app.core.config import settings
 from app.schemas.response import ApiResponse
 from app.routes.documents import router as documents_router
 from app.routes.sessions import router as sessions_router
+from app.routes.tts import router as tts_router
+from app.providers.tts import prewarm_tts
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -13,8 +15,12 @@ app = FastAPI(
     description="FastAPI Backend for RIFT — AI Teacher PDF Narrator",
 )
 
+# Prewarm TTS on application load
+prewarm_tts()
+
 app.include_router(documents_router)
 app.include_router(sessions_router)
+app.include_router(tts_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -33,6 +39,7 @@ def health_check() -> ApiResponse[dict]:
             "status": "ok",
             "service": settings.PROJECT_NAME,
             "version": settings.VERSION,
+            "chatterbox_ready": True,
         },
         message="System healthy",
     )
