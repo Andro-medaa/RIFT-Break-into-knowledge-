@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 import uuid
 from typing import Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 
 from app.schemas.response import ApiResponse
 from app.schemas.lesson import (
@@ -11,8 +12,10 @@ from app.schemas.lesson import (
     LessonPlanResponse,
     UpdateCursorRequest,
 )
+from app.schemas.qa import AskRequest, AskResponse
 from app.routes.documents import DOCUMENTS_STORE
 from app.teach.planner import plan_lesson
+from app.teach.qa import answer_grounded_question, stream_grounded_answer
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -150,4 +153,60 @@ def update_cursor(session_id: str, payload: UpdateCursorRequest) -> ApiResponse[
         success=True,
         data=session,
         message=f"Cursor updated to segment {session.seg_ord}, sentence {session.sent_idx}.",
+    )
+
+
+@router.post("/{session_id}/ask")
+async def ask_question(
+    session_id: str,
+    payload: AskRequest,
+    stream: bool = Query(False, description="Whether to stream the answer via Server-Sent Events (SSE)"),
+):
+    """
+    Step 9: Dual-Grounded Q&A with book citations ([c1], [c2]) and external web citations.
+    Supports both instant JSON responses and Server-Sent Events (SSE) streaming.
+    """
+    session = SESSIONS_STORE.get(session_id)
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session '{session_id}' not found.",
+        )
+
+    doc = DOCUMENTS_STORE.get(session.doc_id)
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document '{session.doc_id}' not found.",
+        )
+
+    if stream:
+        return StreamingResponse(
+            stream_grounded_answer(
+                session_id=session_id,
+                question=payload.question,
+                chunks=doc.chunks,
+                active_chunk_id=payload.active_chunk_id,
+                doc_title=doc.title,
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    response_data = answer_grounded_question(
+        session_id=session_id,
+        question=payload.question,
+        chunks=doc.chunks,
+        active_chunk_id=payload.active_chunk_id,
+        doc_title=doc.title,
+    )
+
+    return ApiResponse(
+        success=True,
+        data=response_data,
+        message="Generated dual-grounded answer with citations.",
     )

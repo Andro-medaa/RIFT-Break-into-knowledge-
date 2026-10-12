@@ -16,6 +16,7 @@ export default function Home() {
   const [activeDocMeta, setActiveDocMeta] = useState<DocumentMeta | null>(null);
   const [parsedChunks, setParsedChunks] = useState<DocumentChunk[]>([]);
   const [restoredSession, setRestoredSession] = useState<SavedSessionData | null>(null);
+  const [submittedQuestion, setSubmittedQuestion] = useState<string | null>(null);
 
   const handleResumeSession = async (saved: SavedSessionData) => {
     setRestoredSession(saved);
@@ -93,7 +94,7 @@ export default function Home() {
       <header className="app-header">
         <div className="brand-badge">
           <span className="badge-dot" />
-          RIFT Monorepo // Step 8 Client-Side Voice Barge-In Active
+          RIFT Monorepo // Step 9 Dual-Grounded Q&A Active
         </div>
         <h1 className="app-title">
           <span className="gradient-text">RIFT</span> — AI Teacher PDF Narrator
@@ -193,7 +194,7 @@ export default function Home() {
           </span>
         </div>
 
-        {/* Step 8: Client-Side Barge-In & Push-to-Talk Voice Bar */}
+        {/* Step 8 & 9: Client-Side Barge-In & Push-to-Talk Voice Bar */}
         <VoiceBargeInBar
           onBargeIn={() => {
             if (typeof window !== "undefined") {
@@ -201,7 +202,7 @@ export default function Home() {
             }
           }}
           onQuestionSubmit={(q) => {
-            console.log("Student question submitted:", q);
+            setSubmittedQuestion(q);
           }}
           onResumeLesson={() => {
             if (typeof window !== "undefined") {
@@ -214,6 +215,7 @@ export default function Home() {
           parsedChunks={parsedChunks}
           documentMeta={activeDocMeta}
           restoredSession={restoredSession}
+          externalQuestion={submittedQuestion}
         />
       </section>
 

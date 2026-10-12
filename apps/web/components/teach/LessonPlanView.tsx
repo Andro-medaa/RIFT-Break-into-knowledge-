@@ -16,6 +16,7 @@ interface LessonPlanViewProps {
   initialSessionId?: string;
   initialSegOrd?: number;
   initialSentIdx?: number;
+  onSessionReady?: (sessionId: string) => void;
 }
 
 const MOVE_THEMES: Record<MoveType, { label: string; bg: string; border: string; color: string; icon: string }> = {
@@ -74,6 +75,7 @@ export const LessonPlanView: React.FC<LessonPlanViewProps> = ({
   initialSessionId,
   initialSegOrd = 0,
   initialSentIdx = 0,
+  onSessionReady,
 }) => {
   const [session, setSession] = useState<ReadingSession | null>(
     initialSessionId && docId
@@ -93,6 +95,13 @@ export const LessonPlanView: React.FC<LessonPlanViewProps> = ({
   const [expandedSegId, setExpandedSegId] = useState<string | null>(null);
   const [activeSpokenSeg, setActiveSpokenSeg] = useState<number>(initialSegOrd);
   const [activeSpokenSent, setActiveSpokenSent] = useState<number>(initialSentIdx);
+
+  // Notify parent of initial session id if present
+  useEffect(() => {
+    if (initialSessionId && onSessionReady) {
+      onSessionReady(initialSessionId);
+    }
+  }, [initialSessionId, onSessionReady]);
 
   // Sync initial restoration props if provided
   useEffect(() => {
@@ -136,6 +145,7 @@ export const LessonPlanView: React.FC<LessonPlanViewProps> = ({
         const sessionJson = await sessionRes.json();
         const newSession: ReadingSession = sessionJson.data;
         setSession(newSession);
+        if (onSessionReady) onSessionReady(newSession.id);
 
         // Step 2: Request structured lesson plan
         const planRes = await fetch(`${base}/sessions/${newSession.id}/plan`, {

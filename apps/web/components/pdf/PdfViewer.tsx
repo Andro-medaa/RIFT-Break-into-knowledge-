@@ -5,6 +5,7 @@ import { HighlightLayer } from "./HighlightLayer";
 import { MiniMap } from "./MiniMap";
 import { ChunkNavigator } from "./ChunkNavigator";
 import { LessonPlanView } from "../teach/LessonPlanView";
+import { GroundedQaPanel } from "../chat/GroundedQaPanel";
 import { SAMPLE_PAGES, SAMPLE_HIGHLIGHTS } from "./SamplePdfData";
 import { HighlightItem } from "@/types/pdf";
 import type { DocumentChunk, DocumentMeta } from "@/types/api";
@@ -14,15 +15,22 @@ interface PdfViewerProps {
   parsedChunks?: DocumentChunk[];
   documentMeta?: DocumentMeta | null;
   restoredSession?: SavedSessionData | null;
+  externalQuestion?: string | null;
 }
 
-export const PdfViewer: React.FC<PdfViewerProps> = ({ parsedChunks, documentMeta, restoredSession }) => {
+export const PdfViewer: React.FC<PdfViewerProps> = ({
+  parsedChunks,
+  documentMeta,
+  restoredSession,
+  externalQuestion,
+}) => {
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [zoom, setZoom] = useState<number>(1.0);
   const [spotlightMode, setSpotlightMode] = useState<boolean>(false);
   const [activeHighlightId, setActiveHighlightId] = useState<string | null>("h1-title");
   const [coveredIds, setCoveredIds] = useState<Set<string>>(new Set(["h1-title"]));
-  const [rightTab, setRightTab] = useState<"chunks" | "lesson">("lesson");
+  const [rightTab, setRightTab] = useState<"chunks" | "lesson" | "qa">("lesson");
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(restoredSession?.sessionId || null);
   const stageRef = useRef<HTMLDivElement>(null);
 
   const highlights: HighlightItem[] = useMemo(() => {
@@ -66,6 +74,32 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ parsedChunks, documentMeta
       }
     }
   }, [restoredSession, highlights]);
+
+  // When an external question is submitted (from VoiceBargeInBar), switch to Q&A tab
+  useEffect(() => {
+    if (externalQuestion) {
+      setRightTab("qa");
+    }
+  }, [externalQuestion]);
+
+  // Ensure active session ID is initialized when documentMeta exists
+  useEffect(() => {
+    if (!activeSessionId && documentMeta) {
+      const fallbacks = ["http://localhost:8000", "http://127.0.0.1:8000"];
+      for (const base of fallbacks) {
+        fetch(`${base}/sessions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ doc_id: documentMeta.id }),
+        })
+          .then((res) => res.json())
+          .then((json) => {
+            if (json.data?.id) setActiveSessionId(json.data.id);
+          })
+          .catch(() => {});
+      }
+    }
+  }, [activeSessionId, documentMeta]);
 
   // Synchronized Chunk Selection with Smooth Auto-Scroll
   const handleSelectChunk = (id: string, pageNo: number) => {
@@ -332,22 +366,45 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ parsedChunks, documentMeta
               onClick={() => setRightTab("lesson")}
               style={{
                 flex: 1,
-                padding: "10px 14px",
+                padding: "10px 8px",
                 border: "none",
                 background: rightTab === "lesson" ? "rgba(56, 189, 248, 0.12)" : "transparent",
                 borderBottom: rightTab === "lesson" ? "2px solid #38bdf8" : "2px solid transparent",
                 color: rightTab === "lesson" ? "#38bdf8" : "#94a3b8",
                 fontWeight: 600,
-                fontSize: "12px",
+                fontSize: "11.5px",
                 cursor: "pointer",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                gap: "6px",
+                gap: "4px",
                 transition: "all 0.15s ease",
               }}
             >
               <span>🎓</span> Lesson Plan
+            </button>
+            <button
+              id="tab-qa"
+              type="button"
+              onClick={() => setRightTab("qa")}
+              style={{
+                flex: 1,
+                padding: "10px 8px",
+                border: "none",
+                background: rightTab === "qa" ? "rgba(56, 189, 248, 0.12)" : "transparent",
+                borderBottom: rightTab === "qa" ? "2px solid #38bdf8" : "2px solid transparent",
+                color: rightTab === "qa" ? "#38bdf8" : "#94a3b8",
+                fontWeight: 600,
+                fontSize: "11.5px",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "4px",
+                transition: "all 0.15s ease",
+              }}
+            >
+              <span>💬</span> Grounded Q&A
             </button>
             <button
               id="tab-roadmap"
@@ -355,22 +412,22 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ parsedChunks, documentMeta
               onClick={() => setRightTab("chunks")}
               style={{
                 flex: 1,
-                padding: "10px 14px",
+                padding: "10px 8px",
                 border: "none",
                 background: rightTab === "chunks" ? "rgba(56, 189, 248, 0.12)" : "transparent",
                 borderBottom: rightTab === "chunks" ? "2px solid #38bdf8" : "2px solid transparent",
                 color: rightTab === "chunks" ? "#38bdf8" : "#94a3b8",
                 fontWeight: 600,
-                fontSize: "12px",
+                fontSize: "11.5px",
                 cursor: "pointer",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                gap: "6px",
+                gap: "4px",
                 transition: "all 0.15s ease",
               }}
             >
-              <span>🗺️</span> Chunk Roadmap
+              <span>🗺️</span> Roadmap
             </button>
           </div>
 
@@ -386,10 +443,28 @@ export const PdfViewer: React.FC<PdfViewerProps> = ({ parsedChunks, documentMeta
                 initialSessionId={restoredSession?.sessionId}
                 initialSegOrd={restoredSession?.segOrd}
                 initialSentIdx={restoredSession?.sentIdx}
+                onSessionReady={(sId) => setActiveSessionId(sId)}
                 onSelectChunk={(cId) => {
                   const h = highlights.find((item) => item.id === cId);
                   if (h) {
                     handleSelectChunk(cId, h.pageNo);
+                  }
+                }}
+              />
+            ) : rightTab === "qa" ? (
+              <GroundedQaPanel
+                sessionId={activeSessionId}
+                docId={documentMeta ? documentMeta.id : restoredSession?.docId || null}
+                docTitle={documentMeta ? documentMeta.title : restoredSession?.docTitle}
+                activeChunkId={activeHighlightId}
+                initialQuestion={externalQuestion}
+                onSelectCitation={(chunkId, pageNo) => {
+                  handleSelectChunk(chunkId, pageNo);
+                }}
+                onResumeLesson={() => {
+                  setRightTab("lesson");
+                  if (typeof window !== "undefined") {
+                    window.dispatchEvent(new CustomEvent("rift:resume-lesson"));
                   }
                 }}
               />
