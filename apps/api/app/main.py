@@ -8,6 +8,7 @@ from app.routes.documents import router as documents_router
 from app.routes.sessions import router as sessions_router
 from app.routes.tts import router as tts_router
 from app.routes.metrics import router as metrics_router
+from app.routes.billing import router as billing_router
 from app.providers.tts import prewarm_tts
 from app.security.middleware import SecurityHeadersMiddleware
 from app.telemetry.middleware import RequestTimingMiddleware
@@ -25,6 +26,7 @@ app.include_router(documents_router)
 app.include_router(sessions_router)
 app.include_router(tts_router)
 app.include_router(metrics_router)
+app.include_router(billing_router)
 
 # Timing, Security, and CORS Middleware
 app.add_middleware(RequestTimingMiddleware)

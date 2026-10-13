@@ -40,5 +40,11 @@ class Settings:
     MAX_PDF_PAGES: int = int(os.getenv("MAX_PDF_PAGES", "500"))
     SIGNED_URL_DEFAULT_EXPIRY_SECONDS: int = int(os.getenv("SIGNED_URL_DEFAULT_EXPIRY_SECONDS", "3600"))
 
+    # Step 17: Billing & Metered Usage
+    STRIPE_SECRET_KEY: str = os.getenv("STRIPE_SECRET_KEY", "").strip()
+    STRIPE_WEBHOOK_SECRET: str = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
+    STRIPE_SCHOLAR_PRICE_ID: str = os.getenv("STRIPE_SCHOLAR_PRICE_ID", "price_scholar_monthly").strip()
+    STRIPE_UNLIMITED_PRICE_ID: str = os.getenv("STRIPE_UNLIMITED_PRICE_ID", "price_unlimited_monthly").strip()
+
 settings = Settings()
 
