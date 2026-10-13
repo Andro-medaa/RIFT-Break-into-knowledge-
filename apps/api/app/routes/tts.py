@@ -1,5 +1,6 @@
 import base64
-from fastapi import APIRouter, Response, HTTPException, status
+from fastapi import APIRouter, Response, HTTPException, status, Query
+from pydantic import BaseModel, Field
 from app.schemas.response import ApiResponse
 from app.schemas.tts import (
     TTSRequest,
@@ -12,6 +13,12 @@ from app.teach.emotion import get_tts_params_for_move
 from app.providers.tts import tts_engine, AUDIO_CACHE
 from app.providers.cache import audio_cache_storage
 from app.providers.chatterbox_turbo import chatterbox_turbo_client
+from app.security.signed_urls import create_signed_url, verify_signed_url
+
+class AudioSignedUrlResponse(BaseModel):
+    cache_key: str
+    signed_url: str
+    expires_in_seconds: int
 
 router = APIRouter(prefix="/tts", tags=["tts"])
 
@@ -171,4 +178,65 @@ def get_tts_cache_stats() -> ApiResponse[TTSStatsResponse]:
         success=True,
         data=response_data,
         message="TTS cache performance and GPU worker statistics retrieved successfully.",
+    )
+
+
+@router.get("/signed-url/{cache_key}", response_model=ApiResponse[AudioSignedUrlResponse])
+def get_audio_signed_url(
+    cache_key: str,
+    expires_in: int = Query(3600, ge=60, le=86400, description="Expiration time in seconds"),
+) -> ApiResponse[AudioSignedUrlResponse]:
+    """Generate expiring HMAC-SHA256 presigned access URL for cached audio asset."""
+    cached = audio_cache_storage.get(cache_key)
+    if cached is None and cache_key not in AUDIO_CACHE:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Audio cache key '{cache_key}' not found.",
+        )
+
+    signed = create_signed_url(f"/tts/secure/{cache_key}", resource_id=cache_key, expires_in_seconds=expires_in)
+    return ApiResponse(
+        success=True,
+        data=AudioSignedUrlResponse(cache_key=cache_key, signed_url=signed, expires_in_seconds=expires_in),
+        message="Cryptographic presigned URL for audio generated.",
+    )
+
+
+@router.get("/secure/{cache_key}")
+def get_secure_cached_audio(
+    cache_key: str,
+    expires: int = Query(..., description="Expiration timestamp"),
+    sig: str = Query(..., description="HMAC signature"),
+) -> Response:
+    """Access protected audio buffer via cryptographic presigned URL."""
+    is_valid, reason = verify_signed_url(resource_id=cache_key, expires_at=expires, signature=sig)
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access denied: {reason}.",
+        )
+
+    cached = audio_cache_storage.get(cache_key)
+    if cached is None:
+        if cache_key not in AUDIO_CACHE:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Audio not found in cache.",
+            )
+        wav_bytes, duration_ms = AUDIO_CACHE[cache_key]
+        tier = "legacy_memory"
+    else:
+        wav_bytes, duration_ms, tier = cached
+
+    return Response(
+        content=wav_bytes,
+        media_type="audio/wav",
+        headers={
+            "Content-Type": "audio/wav",
+            "X-Duration-Ms": str(duration_ms),
+            "X-Cache-Key": cache_key,
+            "X-Cache": "HIT",
+            "X-Cache-Tier": tier,
+            "X-Signature-Verified": "true",
+        },
     )

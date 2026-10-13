@@ -8,6 +8,7 @@ from app.routes.documents import router as documents_router
 from app.routes.sessions import router as sessions_router
 from app.routes.tts import router as tts_router
 from app.providers.tts import prewarm_tts
+from app.security.middleware import SecurityHeadersMiddleware
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -22,6 +23,8 @@ app.include_router(documents_router)
 app.include_router(sessions_router)
 app.include_router(tts_router)
 
+# Security and CORS Middleware
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,

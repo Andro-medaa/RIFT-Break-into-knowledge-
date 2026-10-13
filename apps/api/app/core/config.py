@@ -34,5 +34,11 @@ class Settings:
         )
     )
 
+    # Step 15: Security & Prompt Defense
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "rift-dev-secret-key-32bytes-secure").strip()
+    MAX_UPLOAD_SIZE_BYTES: int = int(os.getenv("MAX_UPLOAD_SIZE_BYTES", str(50 * 1024 * 1024)))
+    MAX_PDF_PAGES: int = int(os.getenv("MAX_PDF_PAGES", "500"))
+    SIGNED_URL_DEFAULT_EXPIRY_SECONDS: int = int(os.getenv("SIGNED_URL_DEFAULT_EXPIRY_SECONDS", "3600"))
+
 settings = Settings()
 

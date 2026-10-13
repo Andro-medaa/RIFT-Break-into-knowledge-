@@ -16,6 +16,7 @@ from app.schemas.qa import AskRequest, AskResponse
 from app.routes.documents import DOCUMENTS_STORE
 from app.teach.planner import plan_lesson
 from app.teach.qa import answer_grounded_question, stream_grounded_answer
+from app.security.defense import scan_for_prompt_injection, sanitize_user_input
 
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
@@ -180,11 +181,20 @@ async def ask_question(
             detail=f"Document '{session.doc_id}' not found.",
         )
 
+    # Step 15: Prompt Injection Guard & Input Sanitization
+    is_suspicious, reason = scan_for_prompt_injection(payload.question)
+    if is_suspicious:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Security alert: prompt injection pattern detected ({reason}). Please phrase your question directly about the lesson.",
+        )
+    clean_question = sanitize_user_input(payload.question)
+
     if stream:
         return StreamingResponse(
             stream_grounded_answer(
                 session_id=session_id,
-                question=payload.question,
+                question=clean_question,
                 chunks=doc.chunks,
                 active_chunk_id=payload.active_chunk_id,
                 doc_title=doc.title,
@@ -199,7 +209,7 @@ async def ask_question(
 
     response_data = answer_grounded_question(
         session_id=session_id,
-        question=payload.question,
+        question=clean_question,
         chunks=doc.chunks,
         active_chunk_id=payload.active_chunk_id,
         doc_title=doc.title,

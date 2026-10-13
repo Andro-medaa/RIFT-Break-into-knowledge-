@@ -11,6 +11,8 @@ from app.ingest.parse import parse_pdf_bytes, DocumentParsed
 from app.search.hybrid import GLOBAL_SEARCH_ENGINE, SearchResponse, SearchMode
 from app.core.auth import get_current_user, User
 from app.queue.job import job_queue_manager
+from app.security.pdf_guard import validate_pdf_safety
+from app.security.signed_urls import create_signed_url, verify_signed_url
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -26,6 +28,11 @@ class SearchRequestPayload(BaseModel):
     query: str = Field(..., min_length=1, description="Search query string")
     limit: int = Field(5, ge=1, le=50, description="Max number of hits")
     mode: SearchMode = Field("hybrid", description="Search mode: hybrid, vector, or bm25")
+
+class SignedUrlResponse(BaseModel):
+    resource_id: str
+    signed_url: str
+    expires_in_seconds: int
 
 # In-memory document storage for prototype
 DOCUMENTS_STORE: Dict[str, DocumentParsed] = {}
@@ -99,6 +106,9 @@ async def upload_document(
             detail="Uploaded file is empty.",
         )
 
+    # Step 15: Sandbox validation against exploits, size limits, and decompression bombs
+    validate_pdf_safety(content, filename=file.filename)
+
     try:
         parsed: DocumentParsed = parse_pdf_bytes(content, filename=file.filename)
     except Exception as exc:
@@ -149,6 +159,9 @@ async def upload_document_async(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Uploaded file is empty.",
         )
+
+    # Step 15: Sandbox validation against exploits, size limits, and decompression bombs
+    validate_pdf_safety(content, filename=file.filename)
 
     owner_id = current_user.id if not current_user.is_guest else None
     ingest_resp = job_queue_manager.enqueue_ingestion(
@@ -277,3 +290,59 @@ def search_document(
         data=results,
         message=f"Found {len(results.hits)} matches using {payload.mode} search.",
     )
+
+
+@router.get("/{doc_id}/signed-url", response_model=ApiResponse[SignedUrlResponse])
+def get_document_signed_url(
+    doc_id: str,
+    expires_in: int = Query(3600, ge=60, le=86400, description="Expiration time in seconds"),
+    current_user: User = Depends(get_current_user),
+) -> ApiResponse[SignedUrlResponse]:
+    """Generate expiring HMAC-SHA256 presigned access URL for document."""
+    parsed = DOCUMENTS_STORE.get(doc_id)
+    if not parsed:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document '{doc_id}' not found.",
+        )
+    verify_document_access(parsed, current_user)
+
+    signed = create_signed_url(f"/documents/{doc_id}/download", resource_id=doc_id, expires_in_seconds=expires_in)
+    return ApiResponse(
+        success=True,
+        data=SignedUrlResponse(resource_id=doc_id, signed_url=signed, expires_in_seconds=expires_in),
+        message="Cryptographic presigned URL generated.",
+    )
+
+
+@router.get("/{doc_id}/download", response_model=ApiResponse[DocumentMeta])
+def download_secure_document(
+    doc_id: str,
+    expires: int = Query(..., description="Expiration timestamp"),
+    sig: str = Query(..., description="HMAC signature"),
+) -> ApiResponse[DocumentMeta]:
+    """Access protected document via cryptographic presigned URL."""
+    is_valid, reason = verify_signed_url(resource_id=doc_id, expires_at=expires, signature=sig)
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access denied: {reason}.",
+        )
+
+    parsed = DOCUMENTS_STORE.get(doc_id)
+    if not parsed:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document '{doc_id}' not found.",
+        )
+
+    meta = DocumentMeta(
+        id=parsed.doc_id,
+        owner_id=parsed.owner_id,
+        title=parsed.title,
+        page_count=parsed.page_count,
+        chunks_count=len(parsed.chunks),
+        status="parsed",
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+    return ApiResponse(success=True, data=meta, message="Presigned access verified.")
