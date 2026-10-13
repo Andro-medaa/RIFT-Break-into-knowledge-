@@ -29,6 +29,24 @@ class DocumentMeta(BaseModel):
     status: str = "parsed"
     created_at: str
 
+class AsyncIngestResponse(BaseModel):
+    doc_id: str
+    job_id: str
+    status: str = "queued"
+    message: str = "Document enqueued for asynchronous processing."
+    progress_url: str
+
+class JobProgressEvent(BaseModel):
+    job_id: str
+    doc_id: str
+    status: str
+    progress: int
+    stage: str
+    message: str
+    page_count: Optional[int] = None
+    chunks_count: Optional[int] = None
+    error: Optional[str] = None
+
 # Type aliases for convenient usage across modules
 Chunk = DocumentChunk
 BoundingBox = NormalizedRect

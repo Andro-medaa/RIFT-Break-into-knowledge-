@@ -1,6 +1,6 @@
 import re
 import uuid
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from dataclasses import dataclass
 import fitz  # PyMuPDF
 

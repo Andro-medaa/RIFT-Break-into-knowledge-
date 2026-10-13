@@ -18,6 +18,7 @@ class Settings:
     ]
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "").strip()
     DATABASE_URL: str = os.getenv("DATABASE_URL", "").strip()
+    REDIS_URL: str = os.getenv("REDIS_URL", "").strip()
     
     # Step 13: GPU Chatterbox-Turbo & Cloudflare R2 Audio Caching
     CHATTERBOX_TURBO_URL: str = os.getenv("CHATTERBOX_TURBO_URL", "").strip()

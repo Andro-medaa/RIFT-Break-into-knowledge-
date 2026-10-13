@@ -1,14 +1,16 @@
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 import fitz
-from fastapi import APIRouter, File, UploadFile, HTTPException, Query, Depends, status
+from fastapi import APIRouter, File, UploadFile, HTTPException, Query, Depends, status, BackgroundTasks
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.schemas.response import ApiResponse
-from app.schemas.document import DocumentChunk, DocumentMeta
+from app.schemas.document import DocumentChunk, DocumentMeta, AsyncIngestResponse, JobProgressEvent
 from app.ingest.parse import parse_pdf_bytes, DocumentParsed
 from app.search.hybrid import GLOBAL_SEARCH_ENGINE, SearchResponse, SearchMode
 from app.core.auth import get_current_user, User
+from app.queue.job import job_queue_manager
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -124,6 +126,75 @@ async def upload_document(
         data=meta,
         message=f"Document '{parsed.title}' parsed into {len(parsed.chunks)} pedagogical chunks.",
     )
+
+
+@router.post("/async", response_model=ApiResponse[AsyncIngestResponse], status_code=status.HTTP_202_ACCEPTED)
+async def upload_document_async(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+) -> ApiResponse[AsyncIngestResponse]:
+    """Upload a PDF document and enqueue it for asynchronous parsing, chunking,
+    embedding generation, and lesson pre-planning with real-time SSE progress events.
+    """
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only PDF documents (.pdf) are supported.",
+        )
+
+    content = await file.read()
+    if not content or len(content) < 10:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty.",
+        )
+
+    owner_id = current_user.id if not current_user.is_guest else None
+    ingest_resp = job_queue_manager.enqueue_ingestion(
+        content=content,
+        filename=file.filename,
+        owner_id=owner_id,
+        target_store=DOCUMENTS_STORE,
+        background_tasks=background_tasks,
+    )
+
+    return ApiResponse(
+        success=True,
+        data=ingest_resp,
+        message=f"Document '{file.filename}' successfully enqueued for background processing.",
+    )
+
+
+@router.get("/{doc_id}/progress")
+async def get_document_progress_stream(doc_id: str) -> StreamingResponse:
+    """Stream real-time Server-Sent Events (SSE) tracking ingestion progress across all pipeline stages."""
+    return StreamingResponse(
+        job_queue_manager.subscribe(doc_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/{doc_id}/job", response_model=ApiResponse[JobProgressEvent])
+def get_document_job_status(doc_id: str) -> ApiResponse[JobProgressEvent]:
+    """Retrieve current ingestion job progress status snapshot."""
+    job = job_queue_manager.get_job_by_doc(doc_id)
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Background ingestion job for document '{doc_id}' not found.",
+        )
+    return ApiResponse(
+        success=True,
+        data=job,
+        message=f"Job {job.job_id} is currently {job.status} ({job.progress}%).",
+    )
+
 
 @router.get("/{doc_id}", response_model=ApiResponse[DocumentMeta])
 def get_document(doc_id: str, current_user: User = Depends(get_current_user)) -> ApiResponse[DocumentMeta]:
