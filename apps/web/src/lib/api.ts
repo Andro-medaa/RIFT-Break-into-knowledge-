@@ -109,7 +109,8 @@ export async function queryDocument(
   question: string,
   instruction?: string,
   ownerId?: string,
-  paragraphs?: Array<{ id: string; text: string; bbox?: any; [key: string]: any }>
+  paragraphs?: Array<{ id: string; text: string; bbox?: any; [key: string]: any }>,
+  fileUrl?: string
 ): Promise<QueryResponse> {
   const res = await fetch(`${API_BASE}/api/documents/${documentId}/query`, {
     method: "POST",
@@ -121,6 +122,7 @@ export async function queryDocument(
       question: question.trim(),
       instruction: instruction?.trim() || undefined,
       paragraphs: paragraphs && paragraphs.length > 0 ? paragraphs : undefined,
+      file_url: fileUrl || undefined,
     }),
   });
 

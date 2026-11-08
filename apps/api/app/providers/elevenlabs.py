@@ -190,6 +190,13 @@ class ElevenLabsProvider:
                 json=payload,
             )
 
+            if resp.status_code == 402 and vid != DEFAULT_VOICE_ID:
+                logger.warning(
+                    f"ElevenLabs voice '{vid}' requires a paid subscription (402). "
+                    f"Falling back to premade default voice '{DEFAULT_VOICE_ID}'."
+                )
+                return await self.synthesize(text=clean_text, voice_id=DEFAULT_VOICE_ID, model_id=mid)
+
             if resp.status_code != 200:
                 logger.error(f"ElevenLabs TTS error {resp.status_code}: {resp.text}")
                 return {

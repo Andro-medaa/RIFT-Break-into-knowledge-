@@ -66,6 +66,7 @@ class QueryRequest(BaseModel):
     question: str = Field(..., description="User's question about the PDF.")
     instruction: Optional[str] = Field(None, description="Optional focus / system instruction.")
     paragraphs: Optional[list[dict[str, Any]]] = Field(None, description="Client-extracted paragraphs with bboxes fallback.")
+    file_url: Optional[str] = Field(None, description="Public or accessible URL to the PDF for server-side PyMuPDF parsing fallback.")
 
 
 class CitationResponse(BaseModel):
@@ -219,6 +220,7 @@ async def query_document_endpoint(
         question=payload.question,
         instruction=payload.instruction,
         client_paragraphs=payload.paragraphs,
+        file_url=payload.file_url,
     )
     return QueryResponse(**result)
 

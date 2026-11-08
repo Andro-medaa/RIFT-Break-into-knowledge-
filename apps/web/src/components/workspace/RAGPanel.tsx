@@ -227,6 +227,7 @@ export default function RAGPanel() {
 
   const {
     documentId: workspaceDocId,
+    pdfUrl,
     messages,
     addMessage,
     updateMessage,
@@ -428,7 +429,7 @@ export default function RAGPanel() {
         let citations: Citation[] = [];
 
         if (activeDocId) {
-          const res = await queryDocument(activeDocId, trimmed, undefined, undefined, paragraphs);
+          const res = await queryDocument(activeDocId, trimmed, undefined, undefined, paragraphs, pdfUrl || undefined);
           answerText = res.answer;
           citations = (res.citations || []).map((c: any) => ({
             id: c.id || genId(),
@@ -478,7 +479,7 @@ export default function RAGPanel() {
         setIsSubmitting(false);
       }
     },
-    [activeDocId, isSubmitting, addMessage, updateMessage, navigateToParagraph, dictateAnswer, paragraphs]
+    [activeDocId, isSubmitting, addMessage, updateMessage, navigateToParagraph, dictateAnswer, paragraphs, pdfUrl]
   );
 
   /* ── Speech Recognition & Real-Time Listening Setup ────────────────────── */

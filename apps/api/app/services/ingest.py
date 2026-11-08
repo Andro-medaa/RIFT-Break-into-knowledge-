@@ -133,28 +133,83 @@ class IngestionService:
         owner_id: str,
     ) -> list[dict[str, Any]]:
         """Retrieve all extracted chunks with bboxes and hierarchy for UI rendering."""
-        engine = get_db()
-        stmt = (
-            select(
-                document_chunks.c.id,
-                document_chunks.c.chunk_index,
-                document_chunks.c.chunk_type,
-                document_chunks.c.content,
-                document_chunks.c.page_number,
-                document_chunks.c.bbox,
-                document_chunks.c.section_path,
-                document_chunks.c.image_url,
-                document_chunks.c.table_markdown,
+        try:
+            engine = get_db()
+            stmt = (
+                select(
+                    document_chunks.c.id,
+                    document_chunks.c.chunk_index,
+                    document_chunks.c.chunk_type,
+                    document_chunks.c.content,
+                    document_chunks.c.page_number,
+                    document_chunks.c.bbox,
+                    document_chunks.c.section_path,
+                    document_chunks.c.image_url,
+                    document_chunks.c.table_markdown,
+                )
+                .where(
+                    document_chunks.c.document_id == document_id,
+                    document_chunks.c.owner_id == owner_id,
+                )
+                .order_by(document_chunks.c.chunk_index.asc())
             )
-            .where(
-                document_chunks.c.document_id == document_id,
-                document_chunks.c.owner_id == owner_id,
-            )
-            .order_by(document_chunks.c.chunk_index.asc())
-        )
-        async with engine.connect() as conn:
-            res = await conn.execute(stmt)
-            return [dict(row._mapping) for row in res.fetchall()]
+            async with engine.connect() as conn:
+                res = await conn.execute(stmt)
+                rows = [dict(row._mapping) for row in res.fetchall()]
+                if rows:
+                    return rows
+        except Exception as exc:
+            logger.warning(f"Database chunk retrieval failed: {exc}, using PyMuPDF fallback")
+
+        # Fallback: extract chunks with bounding boxes directly from PDF using PyMuPDF
+        try:
+            doc = await storage_service.get_document(document_id=document_id, owner_id=owner_id)
+            if not doc:
+                return []
+            pdf_bytes = await self._fetch_pdf_bytes(doc)
+            if not pdf_bytes:
+                return []
+            try:
+                import pymupdf as fitz
+            except ImportError:
+                import fitz
+
+            pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            fallback_chunks = []
+            chunk_idx = 0
+            for page_idx in range(len(pdf_doc)):
+                page = pdf_doc[page_idx]
+                page_num = page_idx + 1
+                pw = page.rect.width or 1.0
+                ph = page.rect.height or 1.0
+                for b_idx, b in enumerate(page.get_text("blocks")):
+                    if len(b) >= 5 and b[4] and b[4].strip():
+                        txt = b[4].strip()
+                        if len(txt) < 8 and not any(ch.isalpha() for ch in txt):
+                            continue
+                        x0, y0, x1, y1 = float(b[0]), float(b[1]), float(b[2]), float(b[3])
+                        fallback_chunks.append({
+                            "id": f"chunk-{page_num}-{chunk_idx}",
+                            "chunk_index": chunk_idx,
+                            "chunk_type": "text",
+                            "content": txt,
+                            "page_number": page_num,
+                            "bbox": {
+                                "x": round(max(0.0, x0 / pw), 4),
+                                "y": round(max(0.0, y0 / ph), 4),
+                                "w": round(min(1.0, (x1 - x0) / pw), 4),
+                                "h": round(min(1.0, (y1 - y0) / ph), 4),
+                            },
+                            "section_path": [f"Page {page_num}"],
+                            "image_url": None,
+                            "table_markdown": None,
+                        })
+                        chunk_idx += 1
+            logger.info(f"Generated {len(fallback_chunks)} fallback chunks from PDF for doc={document_id}")
+            return fallback_chunks
+        except Exception as fb_err:
+            logger.error(f"PyMuPDF fallback failed: {fb_err}")
+            return []
 
     async def _fetch_pdf_bytes(self, doc: dict[str, Any]) -> Optional[bytes]:
         """Download or read PDF bytes from Supabase Storage or storage path."""
