@@ -1,3 +1,6 @@
-from .documents import router as documents_router
+"""Routes package for RIFT API."""
+
+from app.routes.documents import router as documents_router
 
 __all__ = ["documents_router"]
+

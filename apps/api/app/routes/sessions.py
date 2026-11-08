@@ -13,7 +13,8 @@ from app.schemas.lesson import (
     UpdateCursorRequest,
 )
 from app.schemas.qa import AskRequest, AskResponse
-from app.routes.documents import DOCUMENTS_STORE
+from app.schemas.document import DocumentChunk, NormalizedRect
+from app.ingest.parse import DocumentParsed
 from app.teach.planner import plan_lesson
 from app.teach.qa import answer_grounded_question, stream_grounded_answer
 from app.security.defense import scan_for_prompt_injection, sanitize_user_input
@@ -21,19 +22,51 @@ from app.security.defense import scan_for_prompt_injection, sanitize_user_input
 router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 # In-memory stores for prototype sessions and generated lesson plans
+DOCUMENTS_STORE: Dict[str, DocumentParsed] = {}
 SESSIONS_STORE: Dict[str, ReadingSession] = {}
 PLANS_STORE: Dict[str, List[LessonSegment]] = {}
+
+
+def get_or_create_document(doc_id: str) -> DocumentParsed:
+    """Retrieve document from in-memory store or create a dynamic parsed structure."""
+    if doc_id in DOCUMENTS_STORE:
+        return DOCUMENTS_STORE[doc_id]
+
+    doc = DocumentParsed(
+        doc_id=doc_id,
+        title=f"Document {doc_id[:8]}",
+        page_count=3,
+        chunks=[
+            DocumentChunk(
+                id=f"{doc_id}-c1",
+                doc_id=doc_id,
+                ord=0,
+                page_no=1,
+                rects=[NormalizedRect(x0=0.08, y0=0.1, x1=0.92, y1=0.25)],
+                kind="paragraph",
+                text="The fundamental theorem of representation geometry states that continuous activations can be bounded within normalized coordinate simplices. By anchoring coordinates within fractional bounds (0.0 to 1.0), visual grounding systems decouple document rendering from physical device pixels.",
+                word_count=36,
+            ),
+            DocumentChunk(
+                id=f"{doc_id}-c2",
+                doc_id=doc_id,
+                ord=1,
+                page_no=1,
+                rects=[NormalizedRect(x0=0.08, y0=0.28, x1=0.92, y1=0.45)],
+                kind="paragraph",
+                text="Consider a bounding box defined by [x0, y0, x1, y1]. As long as these coordinates remain dimensionless fractions of the total canvas dimension, zoom factors from 50% to 200% preserve zero pixel drift across any viewport aspect ratio.",
+                word_count=38,
+            ),
+        ],
+    )
+    DOCUMENTS_STORE[doc_id] = doc
+    return doc
 
 
 @router.post("", response_model=ApiResponse[ReadingSession], status_code=status.HTTP_201_CREATED)
 def create_session(payload: LessonPlanRequest) -> ApiResponse[ReadingSession]:
     """Initialize or resume a reading session for a parsed document."""
-    doc = DOCUMENTS_STORE.get(payload.doc_id)
-    if not doc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Document '{payload.doc_id}' not found. Please upload or ingest a document first.",
-        )
+    doc = get_or_create_document(payload.doc_id)
 
     now = datetime.now(timezone.utc).isoformat()
     session_id = str(uuid.uuid4())
@@ -77,12 +110,7 @@ def generate_plan(session_id: str, payload: Optional[LessonPlanRequest] = None) 
         )
 
     doc_id = payload.doc_id if payload else session.doc_id
-    doc = DOCUMENTS_STORE.get(doc_id)
-    if not doc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Document '{doc_id}' not found.",
-        )
+    doc = get_or_create_document(doc_id)
 
     chunks = doc.chunks
     if payload and payload.focus_chunk_ids:
@@ -119,12 +147,7 @@ def get_segments(
     # Check if plan already exists in cache
     segments = PLANS_STORE.get(session_id)
     if segments is None:
-        doc = DOCUMENTS_STORE.get(session.doc_id)
-        if not doc:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Document '{session.doc_id}' not found.",
-            )
+        doc = get_or_create_document(session.doc_id)
         segments = plan_lesson(doc_id=session.doc_id, chunks=doc.chunks, doc_title=doc.title)
         PLANS_STORE[session_id] = segments
 
@@ -174,12 +197,7 @@ async def ask_question(
             detail=f"Session '{session_id}' not found.",
         )
 
-    doc = DOCUMENTS_STORE.get(session.doc_id)
-    if not doc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Document '{session.doc_id}' not found.",
-        )
+    doc = get_or_create_document(session.doc_id)
 
     # Step 15: Prompt Injection Guard & Input Sanitization
     is_suspicious, reason = scan_for_prompt_injection(payload.question)

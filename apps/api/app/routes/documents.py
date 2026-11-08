@@ -1,348 +1,321 @@
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
-import fitz
-from fastapi import APIRouter, File, UploadFile, HTTPException, Query, Depends, status, BackgroundTasks
-from fastapi.responses import StreamingResponse
+"""API routes for uploading, retrieving, ingesting, and querying PDF documents in Supabase."""
+
+from typing import Any, Optional
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import BaseModel, Field
 
-from app.schemas.response import ApiResponse
-from app.schemas.document import DocumentChunk, DocumentMeta, AsyncIngestResponse, JobProgressEvent
-from app.ingest.parse import parse_pdf_bytes, DocumentParsed
-from app.search.hybrid import GLOBAL_SEARCH_ENGINE, SearchResponse, SearchMode
-from app.core.auth import get_current_user, User
-from app.queue.job import job_queue_manager
-from app.security.pdf_guard import validate_pdf_safety
-from app.security.signed_urls import create_signed_url, verify_signed_url
+from app.middleware.auth import get_required_owner_id
+from app.schemas.script import ScriptRequest, ScriptResponse
+from app.services.ingest import ingestion_service
+from app.services.rag import rag_service
+from app.services.script import script_service
+from app.services.storage import StorageError, storage_service
 
-router = APIRouter(prefix="/documents", tags=["documents"])
+router = APIRouter(prefix="/api/documents", tags=["Documents"])
 
-def verify_document_access(doc: DocumentParsed, user: User) -> None:
-    """Enforce multi-tenant document isolation (Step 12)."""
-    if doc.owner_id is not None and doc.owner_id != user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access forbidden: you do not have permission to access this document.",
-        )
 
-class SearchRequestPayload(BaseModel):
-    query: str = Field(..., min_length=1, description="Search query string")
-    limit: int = Field(5, ge=1, le=50, description="Max number of hits")
-    mode: SearchMode = Field("hybrid", description="Search mode: hybrid, vector, or bm25")
+# ── Schemas ───────────────────────────────────────────────────────────────────
 
-class SignedUrlResponse(BaseModel):
-    resource_id: str
-    signed_url: str
-    expires_in_seconds: int
 
-# In-memory document storage for prototype
-DOCUMENTS_STORE: Dict[str, DocumentParsed] = {}
+class UploadByAddressRequest(BaseModel):
+    """Payload to upload a PDF by providing a local file path or remote URL."""
 
-@router.post("/sample", response_model=ApiResponse[DocumentMeta], status_code=status.HTTP_201_CREATED)
-def create_and_ingest_sample() -> ApiResponse[DocumentMeta]:
-    """Generate and ingest a real multi-page AI textbook PDF in memory."""
-    doc = fitz.open()
-
-    p1 = doc.new_page(width=680, height=920)
-    p1.insert_text(fitz.Point(54, 80), "Chapter 1: The Geometry of Deep Learning", fontsize=20)
-    p1.insert_text(fitz.Point(54, 115), "1.1 Introduction to Normalized Feature Spaces", fontsize=13)
-    p1.insert_text(fitz.Point(54, 160), "In modern machine learning architectures, high-dimensional representations are routinely projected onto compact manifolds. When analyzing neural networks, spatial normalization ensures invariance under scale transformations.", fontsize=11)
-    p1.insert_text(fitz.Point(54, 230), "The fundamental theorem of representation geometry states that continuous activations can be bounded within normalized coordinate simplices. By anchoring coordinates within fractional bounds (0.0 to 1.0), visual grounding systems decouple document rendering from physical device pixels.", fontsize=11)
-    p1.insert_text(fitz.Point(54, 310), "Consider a bounding box defined by [x0, y0, x1, y1]. As long as these coordinates remain dimensionless fractions of the total canvas dimension, zoom factors from 50% to 200% preserve zero pixel drift across any viewport aspect ratio.", fontsize=11)
-
-    p2 = doc.new_page(width=680, height=920)
-    p2.insert_text(fitz.Point(54, 80), "Chapter 1.2: Attention Weights & Alignment", fontsize=20)
-    p2.insert_text(fitz.Point(54, 115), "Mathematical Formulation of Cross-Attention", fontsize=13)
-    p2.insert_text(fitz.Point(54, 160), "Cross-attention matrices dynamically align auditory speech tokens with physical document tokens. When a student pauses to ask a question, the attention map highlights the precise semantic region under discussion.", fontsize=11)
-    p2.insert_text(fitz.Point(54, 230), "Dual-source grounding requires verifying both local textbook anchors and real-time search context. If a theorem cited in sentence 3 references external evidence, the system renders multi-chromatic highlights: cyan for local book context and amber for external search chips.", fontsize=11)
-    p2.insert_text(fitz.Point(54, 310), "Empirical evaluations demonstrate that visual bounding indicators reduce student cognitive load by 42% compared to unanchored auditory narration alone.", fontsize=11)
-
-    p3 = doc.new_page(width=680, height=920)
-    p3.insert_text(fitz.Point(54, 80), "Chapter 1.3: Real-Time Barge-In & State Resumption", fontsize=20)
-    p3.insert_text(fitz.Point(54, 115), "Sub-300ms Interruption and Pedagogical Bridge", fontsize=13)
-    p3.insert_text(fitz.Point(54, 160), "Human-to-human tutoring relies heavily on natural conversational interruptions. Traditional speech pipelines incur high latency due to sequential round-trip server calls for voice activity detection.", fontsize=11)
-    p3.insert_text(fitz.Point(54, 230), "By placing voice activity detection on the client edge using Silero ONNX models, the audio playback graph is muted in under 50 milliseconds upon speech detection. The backend concurrently computes pedagogical resumption vectors.", fontsize=11)
-    p3.insert_text(fitz.Point(54, 310), "Once the student query is resolved, the narrator delivers a natural conversational bridge line before resuming playback at the exact sentence cursor without losing context.", fontsize=11)
-
-    pdf_bytes = doc.write()
-    doc.close()
-
-    parsed = parse_pdf_bytes(pdf_bytes, filename="Geometry_of_Deep_Learning.pdf")
-    DOCUMENTS_STORE[parsed.doc_id] = parsed
-    GLOBAL_SEARCH_ENGINE.index_document(parsed.doc_id, parsed.chunks)
-
-    meta = DocumentMeta(
-        id=parsed.doc_id,
-        title=parsed.title,
-        page_count=parsed.page_count,
-        chunks_count=len(parsed.chunks),
-        status="parsed",
-        created_at=datetime.now(timezone.utc).isoformat(),
+    file_address: str = Field(
+        ...,
+        description="Local file system path or remote HTTP/HTTPS URL of the PDF.",
+        examples=[
+            "C:/Users/sahoo/Desktop/sample.pdf",
+            "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+        ],
     )
-    return ApiResponse(
-        success=True,
-        data=meta,
-        message=f"Generated and parsed sample textbook PDF '{parsed.title}' into {len(parsed.chunks)} pedagogical chunks.",
+    instruction: Optional[str] = Field(
+        None,
+        description="Optional user instruction / focus directive for document ingestion & RAG.",
     )
 
 
-@router.post("", response_model=ApiResponse[DocumentMeta], status_code=status.HTTP_201_CREATED)
-async def upload_document(
-    file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user),
-) -> ApiResponse[DocumentMeta]:
-    """Upload a PDF document, synchronously parse text blocks and normalized bounding boxes,
-    and return document metadata.
-    """
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only PDF documents (.pdf) are supported.",
-        )
+class DocumentResponse(BaseModel):
+    """Response containing document metadata and the Supabase Storage access link."""
 
-    content = await file.read()
-    if not content or len(content) < 10:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Uploaded file is empty.",
-        )
-
-    # Step 15: Sandbox validation against exploits, size limits, and decompression bombs
-    validate_pdf_safety(content, filename=file.filename)
-
-    try:
-        parsed: DocumentParsed = parse_pdf_bytes(content, filename=file.filename)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Failed to parse PDF document: {str(exc)}",
-        )
-
-    parsed.owner_id = current_user.id if not current_user.is_guest else None
-    DOCUMENTS_STORE[parsed.doc_id] = parsed
-    GLOBAL_SEARCH_ENGINE.index_document(parsed.doc_id, parsed.chunks)
-
-    meta = DocumentMeta(
-        id=parsed.doc_id,
-        owner_id=parsed.owner_id,
-        title=parsed.title,
-        page_count=parsed.page_count,
-        chunks_count=len(parsed.chunks),
-        status="parsed",
-        created_at=datetime.now(timezone.utc).isoformat(),
-    )
-
-    return ApiResponse(
-        success=True,
-        data=meta,
-        message=f"Document '{parsed.title}' parsed into {len(parsed.chunks)} pedagogical chunks.",
-    )
+    id: str
+    owner_id: str
+    filename: str
+    file_url: str = Field(..., description="Public/accessible URL to view or download the PDF.")
+    storage_path: str
+    file_size: int
+    mime_type: str = "application/pdf"
+    created_at: Optional[Any] = None
 
 
-@router.post("/async", response_model=ApiResponse[AsyncIngestResponse], status_code=status.HTTP_202_ACCEPTED)
-async def upload_document_async(
+class DeleteResponse(BaseModel):
+    success: bool
+    message: str
+
+
+class IngestionResponse(BaseModel):
+    document_id: str
+    filename: Optional[str] = None
+    chunks_count: int
+    text_chunks: int
+    table_chunks: int
+    image_chunks: int
+    instruction_applied: bool
+
+
+class QueryRequest(BaseModel):
+    question: str = Field(..., description="User's question about the PDF.")
+    instruction: Optional[str] = Field(None, description="Optional focus / system instruction.")
+    paragraphs: Optional[list[dict[str, Any]]] = Field(None, description="Client-extracted paragraphs with bboxes fallback.")
+
+
+class CitationResponse(BaseModel):
+    id: str
+    label: str
+    page: Optional[int] = 1
+    paragraphId: Optional[str] = None
+    bbox: Optional[dict[str, float]] = None
+    chunkType: Optional[str] = None
+    imageUrl: Optional[str] = None
+    source: Optional[str] = "pdf"
+    url: Optional[str] = None
+    snippet: Optional[str] = None
+
+
+class QueryResponse(BaseModel):
+    answer: str
+    citations: list[CitationResponse] = []
+
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
+
+@router.post(
+    "/upload-by-address",
+    response_model=DocumentResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload PDF from file address or URL",
+    description="Accepts a local file path or remote HTTP/HTTPS URL, loads the PDF, "
+                "uploads it to Supabase Storage, and initiates background ingestion.",
+)
+async def upload_document_by_address(
+    payload: UploadByAddressRequest,
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user),
-) -> ApiResponse[AsyncIngestResponse]:
-    """Upload a PDF document and enqueue it for asynchronous parsing, chunking,
-    embedding generation, and lesson pre-planning with real-time SSE progress events.
-    """
+    owner_id: str = Depends(get_required_owner_id),
+) -> DocumentResponse:
+    """Takes a file address, loads it to Supabase, and triggers background ingestion."""
+    try:
+        doc = await storage_service.upload_from_address(
+            file_address=payload.file_address,
+            owner_id=owner_id,
+        )
+        # Background task for multimodal chunking and Gemini vector embedding
+        background_tasks.add_task(
+            ingestion_service.ingest_document,
+            document_id=doc["id"],
+            owner_id=owner_id,
+            instruction=payload.instruction,
+        )
+        return DocumentResponse(**doc)
+    except StorageError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+
+@router.post(
+    "/upload",
+    response_model=DocumentResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload PDF via multipart form data",
+    description="Uploads a PDF file directly from a client form, stores it in Supabase, "
+                "and initiates background multimodal ingestion with optional user instruction.",
+)
+async def upload_document_file(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(..., description="PDF file to upload"),
+    instruction: Optional[str] = Form(None, description="Optional user instruction / focus directive"),
+    owner_id: str = Depends(get_required_owner_id),
+) -> DocumentResponse:
+    """Direct multipart file upload to Supabase Storage with optional instruction."""
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only PDF documents (.pdf) are supported.",
+            detail="Only .pdf files are accepted.",
         )
 
     content = await file.read()
-    if not content or len(content) < 10:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Uploaded file is empty.",
+    try:
+        doc = await storage_service.upload_and_register(
+            file_bytes=content,
+            filename=file.filename,
+            owner_id=owner_id,
         )
+        # Background task for multimodal chunking and Gemini vector embedding
+        background_tasks.add_task(
+            ingestion_service.ingest_document,
+            document_id=doc["id"],
+            owner_id=owner_id,
+            instruction=instruction,
+        )
+        return DocumentResponse(**doc)
+    except StorageError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
-    # Step 15: Sandbox validation against exploits, size limits, and decompression bombs
-    validate_pdf_safety(content, filename=file.filename)
 
-    owner_id = current_user.id if not current_user.is_guest else None
-    ingest_resp = job_queue_manager.enqueue_ingestion(
-        content=content,
-        filename=file.filename,
+@router.post(
+    "/{document_id}/ingest",
+    response_model=IngestionResponse,
+    summary="Trigger document ingestion",
+    description="Explicitly runs the multimodal ingestion pipeline (tables, images, text, and vector embeddings).",
+)
+async def ingest_document_endpoint(
+    document_id: str,
+    instruction: Optional[str] = None,
+    owner_id: str = Depends(get_required_owner_id),
+) -> IngestionResponse:
+    """Explicitly trigger ingestion for a document."""
+    try:
+        result = await ingestion_service.ingest_document(
+            document_id=document_id,
+            owner_id=owner_id,
+            instruction=instruction,
+        )
+        return IngestionResponse(**result)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+
+@router.get(
+    "/{document_id}/chunks",
+    summary="Get document chunks with bboxes",
+    description="Returns all extracted chunks, bounding boxes, and hierarchy for the PDF viewer and transcript.",
+)
+async def get_document_chunks_endpoint(
+    document_id: str,
+    owner_id: str = Depends(get_required_owner_id),
+) -> list[dict[str, Any]]:
+    """Get all extracted chunks for UI display."""
+    try:
+        return await ingestion_service.get_document_chunks(document_id=document_id, owner_id=owner_id)
+    except Exception as exc:
+        return []
+
+
+@router.post(
+    "/{document_id}/query",
+    response_model=QueryResponse,
+    summary="Query document with RAG",
+    description="Performs hybrid search (dense vector + full-text) and generates an answer with citations.",
+)
+async def query_document_endpoint(
+    document_id: str,
+    payload: QueryRequest,
+    owner_id: str = Depends(get_required_owner_id),
+) -> QueryResponse:
+    """Query a document using hybrid search and Gemini."""
+    result = await rag_service.query(
+        document_id=document_id,
         owner_id=owner_id,
-        target_store=DOCUMENTS_STORE,
-        background_tasks=background_tasks,
+        question=payload.question,
+        instruction=payload.instruction,
+        client_paragraphs=payload.paragraphs,
+    )
+    return QueryResponse(**result)
+
+
+@router.post(
+    "/{document_id}/script",
+    response_model=ScriptResponse,
+    summary="Generate spoken script linked to bboxes",
+    description="Uses Gemini Flash to convert document chunks into 1-2 line spoken segments linked to bboxes.",
+)
+async def generate_script_endpoint(
+    document_id: str,
+    payload: Optional[ScriptRequest] = None,
+    owner_id: str = Depends(get_required_owner_id),
+) -> ScriptResponse:
+    """Generate spoken script segments for the document."""
+    req = payload or ScriptRequest()
+    return await script_service.generate_script(
+        document_id=document_id,
+        owner_id=owner_id,
+        voice_style=req.voice_style or "natural",
+        language=req.language or "en",
+        force_regenerate=req.force_regenerate or False,
+        fallback_chunks=req.paragraphs,
     )
 
-    return ApiResponse(
-        success=True,
-        data=ingest_resp,
-        message=f"Document '{file.filename}' successfully enqueued for background processing.",
+
+@router.get(
+    "/{document_id}/script",
+    response_model=ScriptResponse,
+    summary="Get spoken script segments",
+    description="Fetches cached or generates spoken script segments linked to bboxes.",
+)
+async def get_script_endpoint(
+    document_id: str,
+    voice_style: str = "natural",
+    language: str = "en",
+    owner_id: str = Depends(get_required_owner_id),
+) -> ScriptResponse:
+    """Get spoken script segments for the document."""
+    return await script_service.generate_script(
+        document_id=document_id,
+        owner_id=owner_id,
+        voice_style=voice_style,
+        language=language,
     )
 
 
-@router.get("/{doc_id}/progress")
-async def get_document_progress_stream(doc_id: str) -> StreamingResponse:
-    """Stream real-time Server-Sent Events (SSE) tracking ingestion progress across all pipeline stages."""
-    return StreamingResponse(
-        job_queue_manager.subscribe(doc_id),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+@router.get(
+    "",
+    response_model=list[DocumentResponse],
+    summary="List all uploaded PDFs for authenticated user",
+    description="Returns all PDF documents owned by the caller with their accessible file links.",
+)
+async def list_documents(
+    owner_id: str = Depends(get_required_owner_id),
+) -> list[DocumentResponse]:
+    """List documents scoped to the caller's owner_id."""
+    docs = await storage_service.list_documents(owner_id=owner_id)
+    return [DocumentResponse(**d) for d in docs]
 
 
-@router.get("/{doc_id}/job", response_model=ApiResponse[JobProgressEvent])
-def get_document_job_status(doc_id: str) -> ApiResponse[JobProgressEvent]:
-    """Retrieve current ingestion job progress status snapshot."""
-    job = job_queue_manager.get_job_by_doc(doc_id)
-    if not job:
+@router.get(
+    "/{document_id}",
+    response_model=DocumentResponse,
+    summary="Get single document link & metadata",
+    description="Fetches document metadata and access link by ID (strictly scoped to owner).",
+)
+async def get_document(
+    document_id: str,
+    owner_id: str = Depends(get_required_owner_id),
+) -> DocumentResponse:
+    """Get single document metadata and link."""
+    doc = await storage_service.get_document(document_id=document_id, owner_id=owner_id)
+    if not doc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Background ingestion job for document '{doc_id}' not found.",
+            detail=f"Document '{document_id}' not found.",
         )
-    return ApiResponse(
-        success=True,
-        data=job,
-        message=f"Job {job.job_id} is currently {job.status} ({job.progress}%).",
-    )
+    return DocumentResponse(**doc)
 
 
-@router.get("/{doc_id}", response_model=ApiResponse[DocumentMeta])
-def get_document(doc_id: str, current_user: User = Depends(get_current_user)) -> ApiResponse[DocumentMeta]:
-    """Retrieve document metadata by document ID with multi-tenant access control."""
-    parsed = DOCUMENTS_STORE.get(doc_id)
-    if not parsed:
+@router.delete(
+    "/{document_id}",
+    response_model=DeleteResponse,
+    summary="Delete document",
+    description="Removes the PDF from Supabase Storage and deletes its database record.",
+)
+async def delete_document(
+    document_id: str,
+    owner_id: str = Depends(get_required_owner_id),
+) -> DeleteResponse:
+    """Delete a document from storage and database."""
+    deleted = await storage_service.delete_document(document_id=document_id, owner_id=owner_id)
+    if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Document '{doc_id}' not found.",
+            detail=f"Document '{document_id}' not found or not owned by caller.",
         )
-
-    verify_document_access(parsed, current_user)
-
-    meta = DocumentMeta(
-        id=parsed.doc_id,
-        owner_id=parsed.owner_id,
-        title=parsed.title,
-        page_count=parsed.page_count,
-        chunks_count=len(parsed.chunks),
-        status="parsed",
-        created_at=datetime.now(timezone.utc).isoformat(),
-    )
-    return ApiResponse(success=True, data=meta)
-
-@router.get("/{doc_id}/chunks", response_model=ApiResponse[List[DocumentChunk]])
-def get_document_chunks(
-    doc_id: str,
-    page_no: Optional[int] = Query(None, description="Filter chunks by 1-indexed page number", ge=1),
-    current_user: User = Depends(get_current_user),
-) -> ApiResponse[List[DocumentChunk]]:
-    """Retrieve parsed pedagogical chunks with normalized bounding boxes."""
-    parsed = DOCUMENTS_STORE.get(doc_id)
-    if not parsed:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Document '{doc_id}' not found.",
-        )
-
-    verify_document_access(parsed, current_user)
-
-    chunks = parsed.chunks
-    if page_no is not None:
-        chunks = [c for c in chunks if c.page_no == page_no]
-
-    return ApiResponse(
-        success=True,
-        data=chunks,
-        message=f"Retrieved {len(chunks)} chunks.",
-    )
-
-@router.post("/{doc_id}/search", response_model=ApiResponse[SearchResponse])
-def search_document(
-    doc_id: str,
-    payload: SearchRequestPayload,
-    current_user: User = Depends(get_current_user),
-) -> ApiResponse[SearchResponse]:
-    """Step 11: Execute hybrid search combining BM25 keyword and 768-dim vector embeddings with RRF."""
-    parsed = DOCUMENTS_STORE.get(doc_id)
-    if not parsed:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Document '{doc_id}' not found.",
-        )
-
-    verify_document_access(parsed, current_user)
-
-    # Ensure document is indexed
-    if doc_id not in GLOBAL_SEARCH_ENGINE.doc_chunks:
-        GLOBAL_SEARCH_ENGINE.index_document(doc_id, parsed.chunks)
-
-    results = GLOBAL_SEARCH_ENGINE.search(
-        doc_id=doc_id,
-        query=payload.query,
-        limit=payload.limit,
-        mode=payload.mode,
-    )
-
-    return ApiResponse(
-        success=True,
-        data=results,
-        message=f"Found {len(results.hits)} matches using {payload.mode} search.",
-    )
-
-
-@router.get("/{doc_id}/signed-url", response_model=ApiResponse[SignedUrlResponse])
-def get_document_signed_url(
-    doc_id: str,
-    expires_in: int = Query(3600, ge=60, le=86400, description="Expiration time in seconds"),
-    current_user: User = Depends(get_current_user),
-) -> ApiResponse[SignedUrlResponse]:
-    """Generate expiring HMAC-SHA256 presigned access URL for document."""
-    parsed = DOCUMENTS_STORE.get(doc_id)
-    if not parsed:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Document '{doc_id}' not found.",
-        )
-    verify_document_access(parsed, current_user)
-
-    signed = create_signed_url(f"/documents/{doc_id}/download", resource_id=doc_id, expires_in_seconds=expires_in)
-    return ApiResponse(
-        success=True,
-        data=SignedUrlResponse(resource_id=doc_id, signed_url=signed, expires_in_seconds=expires_in),
-        message="Cryptographic presigned URL generated.",
-    )
-
-
-@router.get("/{doc_id}/download", response_model=ApiResponse[DocumentMeta])
-def download_secure_document(
-    doc_id: str,
-    expires: int = Query(..., description="Expiration timestamp"),
-    sig: str = Query(..., description="HMAC signature"),
-) -> ApiResponse[DocumentMeta]:
-    """Access protected document via cryptographic presigned URL."""
-    is_valid, reason = verify_signed_url(resource_id=doc_id, expires_at=expires, signature=sig)
-    if not is_valid:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Access denied: {reason}.",
-        )
-
-    parsed = DOCUMENTS_STORE.get(doc_id)
-    if not parsed:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Document '{doc_id}' not found.",
-        )
-
-    meta = DocumentMeta(
-        id=parsed.doc_id,
-        owner_id=parsed.owner_id,
-        title=parsed.title,
-        page_count=parsed.page_count,
-        chunks_count=len(parsed.chunks),
-        status="parsed",
-        created_at=datetime.now(timezone.utc).isoformat(),
-    )
-    return ApiResponse(success=True, data=meta, message="Presigned access verified.")
+    return DeleteResponse(success=True, message=f"Document '{document_id}' deleted successfully.")

@@ -37,3 +37,7 @@ Thumbs.db
 # Storage & Audio Cache
 data/
 *.wav
+*.mp3
+log/
+*.log
+apps/api/log/

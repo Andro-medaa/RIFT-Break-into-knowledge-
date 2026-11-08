@@ -13,6 +13,7 @@ from app.teach.emotion import get_tts_params_for_move
 from app.providers.tts import tts_engine, AUDIO_CACHE
 from app.providers.cache import audio_cache_storage
 from app.providers.chatterbox_turbo import chatterbox_turbo_client
+from app.providers.elevenlabs import elevenlabs_provider
 from app.security.signed_urls import create_signed_url, verify_signed_url
 
 class AudioSignedUrlResponse(BaseModel):
@@ -239,4 +240,38 @@ def get_secure_cached_audio(
             "X-Cache-Tier": tier,
             "X-Signature-Verified": "true",
         },
+    )
+
+
+class ElevenLabsTTSRequest(BaseModel):
+    text: str
+    voice_id: str | None = None
+    model_id: str | None = None
+
+
+@router.post("/eleven")
+async def synthesize_elevenlabs(payload: ElevenLabsTTSRequest):
+    """Synthesize speech using ElevenLabs with character/word alignment timestamps and disk caching."""
+    if not payload.text.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Text must not be empty.")
+    result = await elevenlabs_provider.synthesize(
+        text=payload.text,
+        voice_id=payload.voice_id,
+        model_id=payload.model_id,
+    )
+    return ApiResponse(
+        success=True,
+        data=result,
+        message="ElevenLabs speech synthesized with timestamps",
+    )
+
+
+@router.get("/voices")
+async def list_elevenlabs_voices():
+    """List available voices from ElevenLabs or presets."""
+    voices = await elevenlabs_provider.list_voices()
+    return ApiResponse(
+        success=True,
+        data=voices,
+        message="ElevenLabs voices retrieved",
     )
