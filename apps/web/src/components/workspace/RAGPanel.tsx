@@ -264,6 +264,30 @@ export default function RAGPanel() {
   const audioChunksRef = useRef<Blob[]>([]);
   const isListeningModeActiveRef = useRef(false);
   const isRecordingOnceActiveRef = useRef(false);
+  const baseTextRef = useRef<string>("");
+  const currentInputRef = useRef<string>("");
+  const isRecognizingRef = useRef<boolean>(false);
+
+  // Safe recognition start/stop helpers to prevent Chrome InvalidStateError
+  const safeStartRecognition = useCallback(() => {
+    if (!recognitionRef.current) return;
+    if (isRecognizingRef.current) return;
+    try {
+      recognitionRef.current.start();
+    } catch (err: any) {
+      if (err.name !== "InvalidStateError") {
+        console.warn("SpeechRec start error:", err);
+      }
+    }
+  }, []);
+
+  const safeStopRecognition = useCallback(() => {
+    if (!recognitionRef.current) return;
+    try {
+      recognitionRef.current.stop();
+    } catch {}
+    isRecognizingRef.current = false;
+  }, []);
 
   // Auto-scroll message list
   useEffect(() => {
@@ -412,8 +436,20 @@ export default function RAGPanel() {
       const userMsgId = genId();
       const aiMsgId = genId();
 
+      // If one-shot recording was active, stop recording upon sending
+      if (isRecordingOnceActiveRef.current) {
+        setIsRecordingOnce(false);
+        isRecordingOnceActiveRef.current = false;
+        safeStopRecognition();
+      }
+
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+
       addMessage({ id: userMsgId, role: "user", text: trimmed });
       setInput("");
+      currentInputRef.current = "";
+      baseTextRef.current = "";
       setVoiceTranscript("");
       setIsSubmitting(true);
 
@@ -479,10 +515,19 @@ export default function RAGPanel() {
         setIsSubmitting(false);
       }
     },
-    [activeDocId, isSubmitting, addMessage, updateMessage, navigateToParagraph, dictateAnswer, paragraphs, pdfUrl]
+    [activeDocId, isSubmitting, addMessage, updateMessage, navigateToParagraph, dictateAnswer, paragraphs, pdfUrl, safeStopRecognition]
   );
 
-  /* ── Speech Recognition & Real-Time Listening Setup ────────────────────── */
+  /* ── Helper to cleanly join base text with new voice segment ────────────── */
+  const combineSpeechWithBase = useCallback((base: string, speech: string): string => {
+    const cleanBase = base.trim();
+    const cleanSpeech = speech.trim();
+    if (!cleanBase) return cleanSpeech;
+    if (!cleanSpeech) return cleanBase;
+    return `${cleanBase} ${cleanSpeech}`;
+  }, []);
+
+  /* ── Speech Recognition & Continuous Voice Typing Setup ─────────────────── */
   useEffect(() => {
     if (typeof window === "undefined") return;
 
@@ -495,31 +540,57 @@ export default function RAGPanel() {
     rec.interimResults = true;
     rec.lang = "en-US";
 
+    rec.onstart = () => {
+      isRecognizingRef.current = true;
+    };
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rec.onresult = (e: any) => {
-      let interim = "";
-      let finalTranscript = "";
+      let sessionFinal = "";
+      let sessionInterim = "";
 
-      for (let i = e.resultIndex; i < e.results.length; ++i) {
+      // Accumulate across all results in this session from 0 to e.results.length - 1
+      for (let i = 0; i < e.results.length; ++i) {
         const item = e.results[i];
+        const text = item[0]?.transcript || "";
         if (item.isFinal) {
-          finalTranscript += item[0].transcript;
+          if (sessionFinal && !sessionFinal.endsWith(" ") && !text.startsWith(" ")) {
+            sessionFinal += " ";
+          }
+          sessionFinal += text;
         } else {
-          interim += item[0].transcript;
+          if (sessionInterim && !sessionInterim.endsWith(" ") && !text.startsWith(" ")) {
+            sessionInterim += " ";
+          }
+          sessionInterim += text;
         }
       }
 
-      const activeText = (finalTranscript || interim).trim();
-      if (activeText) {
-        setVoiceTranscript(activeText);
-        setInput(activeText);
+      const finalTrimmed = sessionFinal.trim();
+      const interimTrimmed = sessionInterim.trim();
+      const sessionSpeech = [finalTrimmed, interimTrimmed].filter(Boolean).join(" ");
 
-        // In continuous listening mode, auto-submit when user pauses speaking for 1.5s
+      // Seamlessly join with existing text so previous speech is NEVER overwritten
+      const fullText = combineSpeechWithBase(baseTextRef.current, sessionSpeech);
+
+      if (fullText) {
+        setInput(fullText);
+        currentInputRef.current = fullText;
+        setVoiceTranscript(sessionSpeech || fullText);
+
+        // Keep textarea scrolled to the end as words are spoken
+        if (inputRef.current) {
+          inputRef.current.scrollTop = inputRef.current.scrollHeight;
+        }
+
+        // In continuous listening mode, auto-submit after user finishes speaking (2.5s silence)
         if (isListeningModeActiveRef.current) {
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
           silenceTimerRef.current = setTimeout(() => {
-            submitQuestion(activeText);
-          }, 1500);
+            if (isListeningModeActiveRef.current && currentInputRef.current.trim()) {
+              submitQuestion(currentInputRef.current.trim());
+            }
+          }, 2500);
         }
       }
     };
@@ -527,33 +598,45 @@ export default function RAGPanel() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rec.onerror = (e: any) => {
       const errType = e?.error;
-      // Normal speech pauses must not cancel listening mode
+      // Normal speech pauses or aborts must not cancel recording
       if (errType === "no-speech" || errType === "aborted") {
         return;
       }
       console.warn("SpeechRec error:", errType);
-      if (!isListeningModeActiveRef.current) {
+      if (errType === "not-allowed" || errType === "service-not-allowed") {
         setIsRecordingOnce(false);
         isRecordingOnceActiveRef.current = false;
+        setListeningMode(false);
+        isListeningModeActiveRef.current = false;
+        isRecognizingRef.current = false;
       }
     };
 
     rec.onend = () => {
-      if (isListeningModeActiveRef.current) {
-        // Debounced restart prevents Chrome InvalidStateError
+      isRecognizingRef.current = false;
+
+      // Commit whatever text was accumulated into baseTextRef so the next utterance continues typing where previous ended
+      if (currentInputRef.current.trim()) {
+        baseTextRef.current = currentInputRef.current.trim();
+      }
+
+      // If continuous listening or one-shot voice typing is still active, restart smoothly
+      if (isListeningModeActiveRef.current || isRecordingOnceActiveRef.current) {
         if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
         restartTimerRef.current = setTimeout(() => {
-          if (isListeningModeActiveRef.current) {
+          if (
+            (isListeningModeActiveRef.current || isRecordingOnceActiveRef.current) &&
+            !isRecognizingRef.current
+          ) {
             try {
               rec.start();
-            } catch (err) {
-              console.warn("SpeechRec restart error:", err);
+            } catch (err: any) {
+              if (err.name !== "InvalidStateError") {
+                console.warn("SpeechRec restart error:", err);
+              }
             }
           }
         }, 200);
-      } else if (isRecordingOnceActiveRef.current) {
-        setIsRecordingOnce(false);
-        isRecordingOnceActiveRef.current = false;
       }
     };
 
@@ -563,9 +646,11 @@ export default function RAGPanel() {
       try {
         rec.stop();
       } catch {}
+      isRecognizingRef.current = false;
       if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
     };
-  }, [submitQuestion]);
+  }, [submitQuestion, combineSpeechWithBase]);
 
   // Toggle Listening Mode (continuous listening & auto-send)
   const toggleListeningMode = useCallback(async () => {
@@ -573,15 +658,12 @@ export default function RAGPanel() {
       const next = !prev;
       isListeningModeActiveRef.current = next;
       if (next) {
+        baseTextRef.current = currentInputRef.current.trim();
         getCleanMicStream().then(() => {
-          try {
-            recognitionRef.current?.start();
-          } catch {}
+          safeStartRecognition();
         });
       } else {
-        try {
-          recognitionRef.current?.stop();
-        } catch {}
+        safeStopRecognition();
         if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
         if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
         if (micStreamRef.current) {
@@ -591,35 +673,51 @@ export default function RAGPanel() {
       }
       return next;
     });
-  }, [getCleanMicStream]);
+  }, [getCleanMicStream, safeStartRecognition, safeStopRecognition]);
 
-  // One-shot Voice Input Toggle (with Gemini Flash STT fallback)
+  // One-shot Voice Input Toggle (voice typing with continuous append & Gemini Flash STT fallback)
   const toggleVoiceInput = useCallback(async () => {
     if (listeningMode) return; // listening mode is already continuously on
 
     if (isRecordingOnce) {
       setIsRecordingOnce(false);
       isRecordingOnceActiveRef.current = false;
-      try {
-        recognitionRef.current?.stop();
-      } catch {}
+      safeStopRecognition();
+      if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
 
       // If Web Speech API didn't produce text, fallback to Gemini Flash STT
       const fallbackText = await stopMediaRecordingAndTranscribe();
-      if (fallbackText && !input.trim()) {
-        setInput(fallbackText);
-        setVoiceTranscript(fallbackText);
+      if (fallbackText) {
+        const cur = currentInputRef.current.trim();
+        const base = baseTextRef.current.trim();
+        if (!cur || cur === base) {
+          const combined = combineSpeechWithBase(base, fallbackText);
+          setInput(combined);
+          currentInputRef.current = combined;
+          baseTextRef.current = combined;
+          setVoiceTranscript(fallbackText);
+        }
       }
+      baseTextRef.current = currentInputRef.current.trim();
     } else {
       setIsRecordingOnce(true);
       isRecordingOnceActiveRef.current = true;
+      baseTextRef.current = currentInputRef.current.trim();
+
       await getCleanMicStream();
       startMediaRecording();
-      try {
-        recognitionRef.current?.start();
-      } catch {}
+      safeStartRecognition();
     }
-  }, [listeningMode, isRecordingOnce, input, getCleanMicStream, startMediaRecording, stopMediaRecordingAndTranscribe]);
+  }, [
+    listeningMode,
+    isRecordingOnce,
+    getCleanMicStream,
+    startMediaRecording,
+    stopMediaRecordingAndTranscribe,
+    safeStartRecognition,
+    safeStopRecognition,
+    combineSpeechWithBase,
+  ]);
 
   // Citation click handler: navigates PDF viewer and highlights corresponding transcript section
   const handleCitationClick = useCallback(
@@ -1020,7 +1118,12 @@ export default function RAGPanel() {
             <textarea
               ref={inputRef}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                const val = e.target.value;
+                setInput(val);
+                currentInputRef.current = val;
+                baseTextRef.current = val;
+              }}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
@@ -1030,6 +1133,8 @@ export default function RAGPanel() {
               placeholder={
                 listeningMode
                   ? "Listening actively… (or type your question)"
+                  : isRecordingOnce
+                  ? "Listening… speak your question (or type)"
                   : "Ask a question about the PDF… (Enter to send)"
               }
               rows={1}
