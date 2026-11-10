@@ -273,6 +273,10 @@ export default function RAGPanel() {
   const [listeningMode, setListeningMode] = useState(false);
   const [isRecordingOnce, setIsRecordingOnce] = useState(false);
   const [voiceTranscript, setVoiceTranscript] = useState("");
+  /** true once Chrome fires onstart (mic hardware actually opened) */
+  const [isMicActive, setIsMicActive] = useState(false);
+  /** set when mic permission is denied */
+  const [micError, setMicError] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const listEndRef = useRef<HTMLDivElement>(null);
 
@@ -314,17 +318,25 @@ export default function RAGPanel() {
      Safe start / stop helpers (guard against Chrome InvalidStateError)
   ───────────────────────────────────────────────────────────────────────── */
   const safeStartRecognition = useCallback(() => {
-    if (!recognitionRef.current) return;
-    if (isRecognizingRef.current) return;
+    if (!recognitionRef.current) {
+      console.warn("[RIFT Voice] safeStart: recognitionRef is null – SpeechRecognition not initialized");
+      return;
+    }
+    if (isRecognizingRef.current) {
+      console.log("[RIFT Voice] safeStart: already recognizing, skip");
+      return;
+    }
+    console.log("[RIFT Voice] safeStart: calling rec.start()");
     try {
       recognitionRef.current.start();
       isRecognizingRef.current = true;
     } catch (err: any) {
       if (err.name === "InvalidStateError") {
         // Already running – treat as started
+        console.log("[RIFT Voice] safeStart: InvalidStateError – already running");
         isRecognizingRef.current = true;
       } else {
-        console.warn("SpeechRec start error:", err);
+        console.warn("[RIFT Voice] SpeechRec start error:", err);
       }
     }
   }, []);
@@ -609,11 +621,15 @@ export default function RAGPanel() {
     rec.maxAlternatives = 1;
 
     rec.onstart = () => {
+      console.log("[RIFT Voice] Recognition started ✅");
       isRecognizingRef.current = true;
+      setIsMicActive(true);
+      setMicError(null);
     };
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rec.onresult = (e: any) => {
+      console.log("[RIFT Voice] onresult fired, resultIndex:", e.resultIndex, "results:", e.results.length);
       /*
        * CRITICAL: iterate from e.resultIndex (not 0).
        * Chrome delivers ALL results on every event but advances resultIndex to
@@ -682,21 +698,33 @@ export default function RAGPanel() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rec.onerror = (e: any) => {
       const errType = e?.error;
+      console.warn("[RIFT Voice] SpeechRec error:", errType);
       // "no-speech" / "aborted" are normal – don't stop recording
       if (errType === "no-speech" || errType === "aborted") return;
 
-      console.warn("SpeechRec error:", errType);
       if (errType === "not-allowed" || errType === "service-not-allowed") {
+        setMicError("Microphone permission denied. Please allow mic access in your browser and reload.");
         setIsRecordingOnce(false);
         isRecordingOnceActiveRef.current = false;
         setListeningMode(false);
         isListeningModeActiveRef.current = false;
         isRecognizingRef.current = false;
+        setIsMicActive(false);
+      } else if (errType === "audio-capture") {
+        setMicError("No microphone detected. Please connect a mic and try again.");
+        setIsRecordingOnce(false);
+        isRecordingOnceActiveRef.current = false;
+        setIsMicActive(false);
+      } else if (errType === "network") {
+        // Network error from Google's speech service – restart will handle it
+        console.warn("[RIFT Voice] Network error from speech service, will retry on restart");
       }
     };
 
     rec.onend = () => {
+      console.log("[RIFT Voice] Recognition ended. Active?", isListeningModeActiveRef.current || isRecordingOnceActiveRef.current);
       isRecognizingRef.current = false;
+      setIsMicActive(false);
 
       /*
        * Merge session finals into baseTextRef so the NEXT session starts
@@ -741,6 +769,7 @@ export default function RAGPanel() {
     return () => {
       try { rec.stop(); } catch { /* ignore */ }
       isRecognizingRef.current = false;
+      setIsMicActive(false);
       if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
     };
@@ -765,6 +794,8 @@ export default function RAGPanel() {
         safeStopRecognition();
         if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
         if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+        setIsMicActive(false);
+        setVoiceTranscript("");
       }
 
       return next;
@@ -787,6 +818,8 @@ export default function RAGPanel() {
       // Commit current text as base so user can click mic again and continue
       baseTextRef.current = currentInputRef.current.trim();
       sessionFinalsRef.current = "";
+      setIsMicActive(false);
+      setVoiceTranscript("");
     } else {
       // Start recording – fresh session accumulator
       setIsRecordingOnce(true);
@@ -1211,24 +1244,67 @@ export default function RAGPanel() {
           flexShrink: 0,
         }}
       >
-        {/* Live speech preview badge */}
-        {(listeningMode || isRecordingOnce) && voiceTranscript && (
+        {/* ── Mic permission error ── */}
+        {micError && (
           <div
             style={{
               fontSize: "10.5px",
               fontFamily: "var(--font-mono)",
-              color: "#38bdf8",
-              fontStyle: "italic",
-              padding: "2px 6px",
-              background: "rgba(6, 182, 212, 0.08)",
-              borderRadius: "4px",
+              color: "#f87171",
+              padding: "4px 8px",
+              background: "rgba(239, 68, 68, 0.1)",
+              borderRadius: "6px",
+              border: "1px solid rgba(239, 68, 68, 0.3)",
               display: "flex",
               alignItems: "center",
               gap: "6px",
             }}
           >
-            <span className="animate-pulse">●</span>
-            <span>&ldquo;{voiceTranscript}&rdquo;</span>
+            <span>⚠</span>
+            <span>{micError}</span>
+            <button
+              onClick={() => setMicError(null)}
+              style={{ marginLeft: "auto", background: "none", border: "none", color: "#f87171", cursor: "pointer", fontSize: "11px" }}
+            >✕</button>
+          </div>
+        )}
+
+        {/* ── Live speech preview (shows as soon as mic is on, not just when words arrive) ── */}
+        {(listeningMode || isRecordingOnce) && (
+          <div
+            style={{
+              fontSize: "10.5px",
+              fontFamily: "var(--font-mono)",
+              color: voiceTranscript ? "#38bdf8" : "#64748b",
+              fontStyle: "italic",
+              padding: "4px 8px",
+              background: voiceTranscript
+                ? "rgba(6, 182, 212, 0.08)"
+                : "rgba(255,255,255,0.03)",
+              borderRadius: "4px",
+              border: voiceTranscript
+                ? "1px solid rgba(6, 182, 212, 0.2)"
+                : "1px solid rgba(255,255,255,0.06)",
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              minHeight: "26px",
+              transition: "all 0.2s ease",
+            }}
+          >
+            <span
+              className="animate-pulse"
+              style={{ color: isMicActive ? "#22d3ee" : "#64748b", fontSize: "9px" }}
+            >
+              ●
+            </span>
+            {voiceTranscript ? (
+              <span>&ldquo;{voiceTranscript}&rdquo;</span>
+            ) : isMicActive ? (
+              <span style={{ color: "#64748b" }}>Mic active — speak now…</span>
+            ) : (
+              <span style={{ color: "#475569" }}>Starting mic…</span>
+            )}
           </div>
         )}
 
