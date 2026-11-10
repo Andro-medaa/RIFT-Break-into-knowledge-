@@ -10,14 +10,14 @@
  * - One send button
  * - NO mode switcher tabs
  *
- * Voice Input Architecture (Web Speech API):
- * - baseTextRef      : text accumulated from all previous recognition sessions
- * - sessionFinalsRef : finals committed within the CURRENT active session
- * - currentInterim   : live word(s) in progress, updated each onresult event
- * - Display = baseTextRef + sessionFinalsRef + currentInterim  (no double-counting)
- * - On onend: sessionFinalsRef is merged into baseTextRef, then reset to ""
- * - On new session start: sessionFinalsRef is reset to ""
- * - e.resultIndex used in onresult so only NEW events are processed each call
+ * Voice Input Architecture (Web Speech API + Silence-Gated Fallback):
+ * - baseTextRef         : text committed from previous sessions / manual typing
+ * - sessionCommittedRef : live finals + interim from current active session
+ * - Display = mergeWithBase(baseTextRef, sessionCommittedRef)  (no double-counting)
+ * - On onend: sessionCommittedRef merges into baseTextRef, resets to ""
+ * - Recomputes current session's full e.results[0..length-1] idempotently
+ * - Fresh SpeechRecognition instance per session + voiceSessionIdRef race guard
+ * - Explicit browser/permission/network error reporting + silence-gated fallback
  */
 "use client";
 
@@ -47,32 +47,76 @@ import {
   type WordTimestamp,
 } from "@/lib/api";
 import { useWorkspace } from "@/lib/workspace";
-import type { Citation, RAGMessage } from "@/lib/workspace";
+import type { Citation } from "@/lib/workspace";
 import WaveformAnimation from "./WaveformAnimation";
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Typed Web Speech API shims (avoids `any` across Chrome/Edge prefixes)
+───────────────────────────────────────────────────────────────────────────── */
+interface SpeechRecognitionResultAlternativeLike {
+  transcript?: string;
+}
+
+interface SpeechRecognitionResultLike {
+  isFinal: boolean;
+  0?: SpeechRecognitionResultAlternativeLike;
+}
+
+interface SpeechRecognitionEventLike {
+  results: ArrayLike<SpeechRecognitionResultLike>;
+}
+
+interface SpeechRecognitionErrorEventLike {
+  error?: string;
+}
+
+interface SpeechRecognitionInstance {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  maxAlternatives: number;
+  start: () => void;
+  stop: () => void;
+  abort?: () => void;
+  onstart: (() => void) | null;
+  onaudiostart: (() => void) | null;
+  onsoundstart: (() => void) | null;
+  onspeechstart: (() => void) | null;
+  onresult: ((e: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((e: SpeechRecognitionErrorEventLike) => void) | null;
+  onend: (() => void) | null;
+}
+
+type SpeechRecognitionCtor = new () => SpeechRecognitionInstance;
+
+function getSpeechRecognitionCtor(): SpeechRecognitionCtor | undefined {
+  if (typeof window === "undefined") return undefined;
+  const w = window as unknown as {
+    SpeechRecognition?: SpeechRecognitionCtor;
+    webkitSpeechRecognition?: SpeechRecognitionCtor;
+  };
+  return w.SpeechRecognition || w.webkitSpeechRecognition;
+}
+
+function getErrorMessage(err: unknown, fallback: string): string {
+  if (err && typeof err === "object" && "message" in err && typeof (err as { message?: unknown }).message === "string") {
+    return (err as { message: string }).message;
+  }
+  return fallback;
+}
+
+function getErrorName(err: unknown): string {
+  if (err && typeof err === "object" && "name" in err && typeof (err as { name?: unknown }).name === "string") {
+    return (err as { name: string }).name;
+  }
+  return "";
+}
 
 /* ─────────────────────────────────────────────────────────────────────────────
    Helpers
 ───────────────────────────────────────────────────────────────────────────── */
 function genId() {
   return Math.random().toString(36).slice(2);
-}
-
-/* ── Blinking stream cursor ───────────────────────────────────────────────── */
-function StreamCursor() {
-  return (
-    <span
-      className="stream-cursor"
-      style={{
-        display: "inline-block",
-        width: "2px",
-        height: "14px",
-        background: "#38bdf8",
-        marginLeft: "3px",
-        verticalAlign: "text-bottom",
-        borderRadius: "1px",
-      }}
-    />
-  );
 }
 
 /* ── Wavebars thinking indicator ──────────────────────────────────────────── */
@@ -166,7 +210,7 @@ function CitationChip({
   citation: Citation;
   onNavigate: (c: Citation) => void;
 }) {
-  const isWeb = !!citation.url || (citation as any).source === "web";
+  const isWeb = !!citation.url || citation.source === "web";
   const [showTooltip, setShowTooltip] = useState(false);
 
   return (
@@ -273,9 +317,9 @@ export default function RAGPanel() {
   const [listeningMode, setListeningMode] = useState(false);
   const [isRecordingOnce, setIsRecordingOnce] = useState(false);
   const [voiceTranscript, setVoiceTranscript] = useState("");
-  /** true once Chrome fires onstart (mic hardware actually opened) */
-  const [isMicActive, setIsMicActive] = useState(false);
-  /** set when mic permission is denied */
+  const [micStatus, setMicStatus] = useState<
+    "idle" | "starting" | "listening" | "hearing" | "fallback" | "transcribing"
+  >("idle");
   const [micError, setMicError] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const listEndRef = useRef<HTMLDivElement>(null);
@@ -286,69 +330,49 @@ export default function RAGPanel() {
   const [answerCurrentTime, setAnswerCurrentTime] = useState(0);
   const [answerTimeline, setAnswerTimeline] = useState<WordTimestamp[]>([]);
 
-  /* ── Speech Recognition refs ──────────────────────────────────────────── */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const recognitionRef = useRef<any>(null);
+  /* ── Speech Recognition & Voice Input refs ────────────────────────────── */
+  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
+  const startSpeechSessionRef = useRef<() => void>(() => {});
+  const voiceSessionIdRef = useRef<number>(0);
+  const activeModeRef = useRef<"none" | "once" | "listening">("none");
+  const isRecognizingRef = useRef<boolean>(false);
+  const networkErrorCountRef = useRef<number>(0);
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isRecognizingRef = useRef<boolean>(false);
-  const isListeningModeActiveRef = useRef(false);
-  const isRecordingOnceActiveRef = useRef(false);
+  const editRestartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /**
    * Voice text accumulation:
-   *   baseTextRef      – all text from PREVIOUS recognition sessions (survives onend)
-   *   sessionFinalsRef – finals received in the CURRENT session (reset on new session start
-   *                      and merged into baseTextRef on onend)
-   *   currentInputRef  – the full visible text currently in the textarea
+   *   baseTextRef         – all committed text from PREVIOUS sessions or manual typing
+   *   sessionCommittedRef – complete transcript (finals + interim) of CURRENT session
+   *   currentInputRef     – latest full visible text in textarea
    */
   const baseTextRef = useRef<string>("");
-  const sessionFinalsRef = useRef<string>("");
+  const sessionCommittedRef = useRef<string>("");
   const currentInputRef = useRef<string>("");
 
-  /* ── MediaRecorder refs (kept for future fallback use) ────────────────── */
-  const micStreamRef = useRef<MediaStream | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
+  /* ── Silence-gated MediaRecorder fallback (only if Web Speech unavailable/blocked) ── */
+  const usingFallbackRef = useRef<boolean>(false);
+  const fallbackStreamRef = useRef<MediaStream | null>(null);
+  const fallbackRecorderRef = useRef<MediaRecorder | null>(null);
+  const fallbackChunksRef = useRef<Blob[]>([]);
+  const fallbackAudioCtxRef = useRef<AudioContext | null>(null);
+  const fallbackRafRef = useRef<number | null>(null);
+  const fallbackPeakRmsRef = useRef<number>(0);
+  const fallbackStartTimeRef = useRef<number>(0);
 
-  /* ── submitQuestion ref so speech callbacks always call latest version ── */
+  /* ── submitQuestion ref so async callbacks always invoke latest version ── */
   const submitQuestionRef = useRef<(q: string) => Promise<void>>(async () => {});
 
   /* ─────────────────────────────────────────────────────────────────────────
-     Safe start / stop helpers (guard against Chrome InvalidStateError)
+     Helper: append spoken text cleanly after baseTextRef without duplicates
   ───────────────────────────────────────────────────────────────────────── */
-  const safeStartRecognition = useCallback(() => {
-    if (!recognitionRef.current) {
-      console.warn("[RIFT Voice] safeStart: recognitionRef is null – SpeechRecognition not initialized");
-      return;
-    }
-    if (isRecognizingRef.current) {
-      console.log("[RIFT Voice] safeStart: already recognizing, skip");
-      return;
-    }
-    console.log("[RIFT Voice] safeStart: calling rec.start()");
-    try {
-      recognitionRef.current.start();
-      isRecognizingRef.current = true;
-    } catch (err: any) {
-      if (err.name === "InvalidStateError") {
-        // Already running – treat as started
-        console.log("[RIFT Voice] safeStart: InvalidStateError – already running");
-        isRecognizingRef.current = true;
-      } else {
-        console.warn("[RIFT Voice] SpeechRec start error:", err);
-      }
-    }
-  }, []);
-
-  const safeStopRecognition = useCallback(() => {
-    if (!recognitionRef.current) return;
-    try {
-      recognitionRef.current.stop();
-    } catch {
-      /* ignore */
-    }
-    isRecognizingRef.current = false;
+  const mergeWithBase = useCallback((base: string, addition: string): string => {
+    const cleanBase = base.trim();
+    const cleanAdd = addition.trim();
+    if (!cleanBase) return cleanAdd;
+    if (!cleanAdd) return cleanBase;
+    return `${cleanBase} ${cleanAdd}`;
   }, []);
 
   /* ─────────────────────────────────────────────────────────────────────────
@@ -417,74 +441,458 @@ export default function RAGPanel() {
   );
 
   /* ─────────────────────────────────────────────────────────────────────────
-     Clean mic stream acquisition (echo/noise suppression)
+     Cleanly dispose active Web Speech instance (prevents Chrome InvalidState / stale onend races)
   ───────────────────────────────────────────────────────────────────────── */
-  const getCleanMicStream = useCallback(async () => {
-    if (micStreamRef.current && micStreamRef.current.active) {
-      return micStreamRef.current;
+  const disposeSpeechSession = useCallback((abort = false) => {
+    voiceSessionIdRef.current += 1;
+    const rec = recognitionRef.current;
+    recognitionRef.current = null;
+    isRecognizingRef.current = false;
+
+    if (rec) {
+      rec.onstart = null;
+      rec.onaudiostart = null;
+      rec.onsoundstart = null;
+      rec.onspeechstart = null;
+      rec.onresult = null;
+      rec.onerror = null;
+      rec.onend = null;
+      try {
+        if (abort && typeof rec.abort === "function") {
+          rec.abort();
+        } else {
+          rec.stop();
+        }
+      } catch {
+        /* ignore */
+      }
     }
+  }, []);
+
+  /* ─────────────────────────────────────────────────────────────────────────
+     Stop Silence-Gated Fallback Recorder (only used if Web Speech unavailable/blocked)
+  ───────────────────────────────────────────────────────────────────────── */
+  const stopFallbackRecorder = useCallback(
+    async (discard: boolean) => {
+      if (fallbackRafRef.current) {
+        cancelAnimationFrame(fallbackRafRef.current);
+        fallbackRafRef.current = null;
+      }
+
+      const peakRms = fallbackPeakRmsRef.current;
+      const elapsedMs = Date.now() - fallbackStartTimeRef.current;
+      const mr = fallbackRecorderRef.current;
+      fallbackRecorderRef.current = null;
+
+      const cleanupStream = () => {
+        if (fallbackAudioCtxRef.current) {
+          fallbackAudioCtxRef.current.close().catch(() => {});
+          fallbackAudioCtxRef.current = null;
+        }
+        if (fallbackStreamRef.current) {
+          fallbackStreamRef.current.getTracks().forEach((t) => t.stop());
+          fallbackStreamRef.current = null;
+        }
+      };
+
+      if (!mr || mr.state === "inactive") {
+        cleanupStream();
+        fallbackChunksRef.current = [];
+        usingFallbackRef.current = false;
+        setMicStatus("idle");
+        return;
+      }
+
+      await new Promise<void>((resolve) => {
+        mr.onstop = async () => {
+          const chunks = fallbackChunksRef.current;
+          fallbackChunksRef.current = [];
+          cleanupStream();
+          usingFallbackRef.current = false;
+
+          if (discard || chunks.length === 0) {
+            setMicStatus("idle");
+            resolve();
+            return;
+          }
+
+          // Silence / click noise gate: never call backend STT if no real speech amplitude occurred
+          if (elapsedMs < 350 || peakRms < 0.012) {
+            setMicError("No speech detected. Speak clearly closer to the mic and try again.");
+            setMicStatus("idle");
+            resolve();
+            return;
+          }
+
+          const blob = new Blob(chunks, { type: mr.mimeType || "audio/webm" });
+          if (blob.size < 600) {
+            setMicStatus("idle");
+            resolve();
+            return;
+          }
+
+          setMicStatus("transcribing");
+          try {
+            const text = (await transcribeAudio(blob)).trim();
+            if (text) {
+              const combined = mergeWithBase(baseTextRef.current, text);
+              baseTextRef.current = combined;
+              currentInputRef.current = combined;
+              setInput(combined);
+              setVoiceTranscript(text);
+            } else {
+              setMicError("Could not detect clear speech in audio.");
+            }
+          } catch (err: unknown) {
+            setMicError(getErrorMessage(err, "Speech transcription request failed."));
+          } finally {
+            setMicStatus("idle");
+            resolve();
+          }
+        };
+
+        try {
+          mr.stop();
+        } catch {
+          cleanupStream();
+          usingFallbackRef.current = false;
+          setMicStatus("idle");
+          resolve();
+        }
+      });
+    },
+    [mergeWithBase]
+  );
+
+  /* ─────────────────────────────────────────────────────────────────────────
+     Start Silence-Gated MediaRecorder Fallback (for Firefox / Brave / blocked network)
+  ───────────────────────────────────────────────────────────────────────── */
+  const startFallbackRecorder = useCallback(async () => {
     try {
+      usingFallbackRef.current = true;
+      setMicStatus("starting");
+
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
           channelCount: 1,
-          sampleRate: 16000,
         },
       });
-      micStreamRef.current = stream;
-      return stream;
-    } catch (err) {
-      console.warn("Could not acquire audio stream:", err);
-      return null;
+
+      // Verify user didn't cancel while permission dialog was open
+      if (activeModeRef.current === "none") {
+        stream.getTracks().forEach((t) => t.stop());
+        usingFallbackRef.current = false;
+        setMicStatus("idle");
+        return;
+      }
+
+      fallbackStreamRef.current = stream;
+      fallbackChunksRef.current = [];
+      fallbackPeakRmsRef.current = 0;
+      fallbackStartTimeRef.current = Date.now();
+
+      // Track peak RMS amplitude to prevent hallucinating on silence
+      try {
+        const AudioCtx =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        const ctx = new AudioCtx();
+        const src = ctx.createMediaStreamSource(stream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 1024;
+        src.connect(analyser);
+        fallbackAudioCtxRef.current = ctx;
+
+        const data = new Float32Array(analyser.fftSize);
+        const measure = () => {
+          if (!fallbackRecorderRef.current) return;
+          analyser.getFloatTimeDomainData(data);
+          let sumSq = 0;
+          for (let i = 0; i < data.length; i++) sumSq += data[i] * data[i];
+          const rms = Math.sqrt(sumSq / data.length);
+          if (rms > fallbackPeakRmsRef.current) {
+            fallbackPeakRmsRef.current = rms;
+          }
+          fallbackRafRef.current = requestAnimationFrame(measure);
+        };
+        fallbackRafRef.current = requestAnimationFrame(measure);
+      } catch {
+        /* AudioContext optional; fallback still records */
+      }
+
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : "";
+      const mr = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
+
+      mr.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) fallbackChunksRef.current.push(e.data);
+      };
+
+      mr.start(250);
+      fallbackRecorderRef.current = mr;
+      setMicStatus("fallback");
+    } catch (err: unknown) {
+      usingFallbackRef.current = false;
+      activeModeRef.current = "none";
+      setIsRecordingOnce(false);
+      setListeningMode(false);
+      setMicStatus("idle");
+      setMicError(
+        getErrorName(err) === "NotAllowedError"
+          ? "Microphone permission denied. Allow mic access in your browser address bar and try again."
+          : getErrorMessage(err, "Could not open microphone.")
+      );
     }
   }, []);
 
   /* ─────────────────────────────────────────────────────────────────────────
-     MediaRecorder (kept for fallback / future use)
+     Start Fresh Web Speech API Session (synchronous inside user click!)
   ───────────────────────────────────────────────────────────────────────── */
-  const startMediaRecording = useCallback(
-    async () => {
-      try {
-        const stream = await getCleanMicStream();
-        if (!stream) return;
-        audioChunksRef.current = [];
-        const mr = new MediaRecorder(stream, { mimeType: "audio/webm" });
-        mr.ondataavailable = (e) => {
-          if (e.data && e.data.size > 0) audioChunksRef.current.push(e.data);
-        };
-        mr.start(250);
-        mediaRecorderRef.current = mr;
-      } catch (err) {
-        console.warn("MediaRecorder start error:", err);
-      }
-    },
-    [getCleanMicStream]
-  );
+  const startSpeechSession = useCallback(() => {
+    if (typeof window === "undefined") return;
+    if (restartTimerRef.current) {
+      clearTimeout(restartTimerRef.current);
+      restartTimerRef.current = null;
+    }
 
-  const stopMediaRecordingAndTranscribe = useCallback(async (): Promise<string> => {
-    return new Promise((resolve) => {
-      const mr = mediaRecorderRef.current;
-      if (!mr || mr.state === "inactive") {
-        resolve("");
+    // Cleanly close any lingering prior instance before starting fresh
+    disposeSpeechSession(true);
+
+    const SpeechRec = getSpeechRecognitionCtor();
+
+    if (!SpeechRec) {
+      console.warn("[RIFT Voice] Web Speech API not supported in this browser");
+      if (activeModeRef.current === "once") {
+        setMicError(
+          "Live word streaming requires Chrome or Edge (Web Speech API is missing in this browser). Recording audio fallback — click Mic again to transcribe."
+        );
+        void startFallbackRecorder();
+      } else {
+        activeModeRef.current = "none";
+        setListeningMode(false);
+        setMicStatus("idle");
+        setMicError(
+          "Continuous Listening requires Chrome or Edge (Web Speech API is not supported in this browser)."
+        );
+      }
+      return;
+    }
+
+    const sessionId = voiceSessionIdRef.current;
+    const rec = new SpeechRec();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = "en-US";
+    rec.maxAlternatives = 1;
+    recognitionRef.current = rec;
+
+    rec.onstart = () => {
+      if (sessionId !== voiceSessionIdRef.current) return;
+      console.log("[RIFT Voice] SpeechRecognition started ✅");
+      isRecognizingRef.current = true;
+      setMicStatus((prev) => (prev === "hearing" ? "hearing" : "listening"));
+    };
+
+    rec.onaudiostart = () => {
+      if (sessionId !== voiceSessionIdRef.current) return;
+      console.log("[RIFT Voice] Audio capture started");
+      setMicStatus((prev) => (prev === "hearing" ? "hearing" : "listening"));
+    };
+
+    rec.onsoundstart = () => {
+      if (sessionId !== voiceSessionIdRef.current) return;
+      setMicStatus("hearing");
+    };
+
+    rec.onspeechstart = () => {
+      if (sessionId !== voiceSessionIdRef.current) return;
+      setMicStatus("hearing");
+    };
+
+    rec.onresult = (e: SpeechRecognitionEventLike) => {
+      if (sessionId !== voiceSessionIdRef.current) return;
+      networkErrorCountRef.current = 0;
+      setMicStatus("hearing");
+
+      /*
+       * Recompute the entire CURRENT session's transcript (finals + interim) from e.results.
+       * This is idempotent across duplicate/corrected browser events and guarantees
+       * words never duplicate or replace earlier sessions stored in baseTextRef.
+       */
+      let sessionFinals = "";
+      let sessionInterim = "";
+
+      for (let i = 0; i < e.results.length; ++i) {
+        const item = e.results[i];
+        const text = (item[0]?.transcript || "").trim();
+        if (!text) continue;
+
+        if (item.isFinal) {
+          sessionFinals = sessionFinals ? `${sessionFinals} ${text}` : text;
+        } else {
+          sessionInterim = sessionInterim ? `${sessionInterim} ${text}` : text;
+        }
+      }
+
+      const sessionText = [sessionFinals, sessionInterim].filter(Boolean).join(" ");
+      sessionCommittedRef.current = sessionText;
+
+      const fullText = mergeWithBase(baseTextRef.current, sessionText);
+      console.log("[RIFT Voice] onresult ->", { sessionFinals, sessionInterim, fullText });
+
+      if (fullText) {
+        setInput(fullText);
+        currentInputRef.current = fullText;
+        setVoiceTranscript(sessionText || fullText);
+
+        // Keep typing box scrolled to bottom as words stream in
+        if (inputRef.current) {
+          inputRef.current.scrollTop = inputRef.current.scrollHeight;
+        }
+
+        // Continuous listening mode: auto-send 2.5 s after user pauses speaking
+        if (activeModeRef.current === "listening") {
+          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+          silenceTimerRef.current = setTimeout(() => {
+            if (activeModeRef.current === "listening" && currentInputRef.current.trim()) {
+              submitQuestionRef.current(currentInputRef.current.trim());
+            }
+          }, 2500);
+        }
+      }
+    };
+
+    rec.onerror = (e: SpeechRecognitionErrorEventLike) => {
+      if (sessionId !== voiceSessionIdRef.current) return;
+      const errType = e?.error;
+      console.warn("[RIFT Voice] SpeechRec error:", errType);
+
+      if (errType === "no-speech" || errType === "aborted") {
+        // Normal silence timeout or deliberate restart – onend will handle restart cleanly
         return;
       }
-      mr.onstop = async () => {
-        try {
-          if (audioChunksRef.current.length === 0) { resolve(""); return; }
-          const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
-          audioChunksRef.current = [];
-          if (blob.size < 500) { resolve(""); return; }
-          const text = await transcribeAudio(blob);
-          resolve(text);
-        } catch {
-          resolve("");
+
+      if (errType === "not-allowed") {
+        disposeSpeechSession(true);
+        activeModeRef.current = "none";
+        setIsRecordingOnce(false);
+        setListeningMode(false);
+        setMicStatus("idle");
+        setMicError(
+          "Microphone permission denied. Allow microphone access in your browser address bar and try again."
+        );
+        return;
+      }
+
+      if (errType === "audio-capture") {
+        disposeSpeechSession(true);
+        activeModeRef.current = "none";
+        setIsRecordingOnce(false);
+        setListeningMode(false);
+        setMicStatus("idle");
+        setMicError(
+          "No microphone detected or mic is locked by another app. Check your Windows/browser mic input."
+        );
+        return;
+      }
+
+      if (errType === "network" || errType === "service-not-allowed") {
+        networkErrorCountRef.current += 1;
+        if (networkErrorCountRef.current >= 2 || errType === "service-not-allowed") {
+          // Browser blocked Google/Microsoft speech cloud (common in Brave, VPNs, offline, firewalls)
+          disposeSpeechSession(true);
+          if (activeModeRef.current === "once") {
+            setMicError(
+              "Live Web Speech API failed ('network' blocked — common in Brave/firewall/offline; use Chrome or Edge for live streaming). Switched to audio fallback: speak and click Mic to transcribe."
+            );
+            void startFallbackRecorder();
+          } else {
+            activeModeRef.current = "none";
+            setListeningMode(false);
+            setMicStatus("idle");
+            setMicError(
+              "Continuous Listening requires online Web Speech API access (Chrome/Edge). Speech service returned '" +
+                errType +
+                "'."
+            );
+          }
         }
-      };
-      try { mr.stop(); } catch { resolve(""); }
-    });
-  }, []);
+      }
+    };
+
+    rec.onend = () => {
+      if (sessionId !== voiceSessionIdRef.current) return;
+      console.log("[RIFT Voice] SpeechRec ended; activeMode =", activeModeRef.current);
+      recognitionRef.current = null;
+      isRecognizingRef.current = false;
+
+      // Commit everything spoken in this session (finals + any unfinalized interim) into baseTextRef
+      if (sessionCommittedRef.current.trim()) {
+        baseTextRef.current = mergeWithBase(
+          baseTextRef.current,
+          sessionCommittedRef.current
+        );
+        sessionCommittedRef.current = "";
+      }
+
+      // Auto-restart seamlessly if voice typing / listening mode is still enabled
+      if (activeModeRef.current !== "none" && !usingFallbackRef.current) {
+        if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+        restartTimerRef.current = setTimeout(() => {
+          if (activeModeRef.current !== "none" && !usingFallbackRef.current) {
+            startSpeechSessionRef.current();
+          }
+        }, 150);
+      } else if (!usingFallbackRef.current) {
+        setMicStatus("idle");
+      }
+    };
+
+    try {
+      console.log("[RIFT Voice] Calling rec.start()");
+      rec.start();
+      isRecognizingRef.current = true;
+    } catch (err: unknown) {
+      console.warn("[RIFT Voice] rec.start() threw:", err);
+      disposeSpeechSession(true);
+      const errMsg = getErrorMessage(err, "browser error");
+      if (activeModeRef.current === "once") {
+        setMicError(
+          `Could not start live Web Speech (${errMsg}). Switching to audio recorder fallback.`
+        );
+        void startFallbackRecorder();
+      } else {
+        activeModeRef.current = "none";
+        setListeningMode(false);
+        setMicStatus("idle");
+        setMicError(`Could not start Web Speech API: ${errMsg}`);
+      }
+    }
+  }, [disposeSpeechSession, mergeWithBase, startFallbackRecorder]);
+
+  useEffect(() => {
+    startSpeechSessionRef.current = startSpeechSession;
+  }, [startSpeechSession]);
+
+  /* Cleanup timers & audio on unmount */
+  useEffect(() => {
+    return () => {
+      activeModeRef.current = "none";
+      disposeSpeechSession(true);
+      void stopFallbackRecorder(true);
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+      if (editRestartTimerRef.current) clearTimeout(editRestartTimerRef.current);
+    };
+  }, [disposeSpeechSession, stopFallbackRecorder]);
 
   /* ─────────────────────────────────────────────────────────────────────────
      Question submission
@@ -497,23 +905,36 @@ export default function RAGPanel() {
       const userMsgId = genId();
       const aiMsgId = genId();
 
-      // Stop one-shot recording if active
-      if (isRecordingOnceActiveRef.current) {
-        setIsRecordingOnce(false);
-        isRecordingOnceActiveRef.current = false;
-        safeStopRecognition();
-      }
-
+      // Clear timers before resetting buffers
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
       if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+      if (editRestartTimerRef.current) clearTimeout(editRestartTimerRef.current);
+
+      // Stop one-shot voice input on send; in continuous listening, restart session clean after clearing
+      const wasListening = activeModeRef.current === "listening";
+      if (activeModeRef.current === "once") {
+        activeModeRef.current = "none";
+        setIsRecordingOnce(false);
+        if (usingFallbackRef.current) {
+          void stopFallbackRecorder(true);
+        } else {
+          disposeSpeechSession(true);
+          setMicStatus("idle");
+        }
+      }
 
       addMessage({ id: userMsgId, role: "user", text: trimmed });
       setInput("");
       currentInputRef.current = "";
       baseTextRef.current = "";
-      sessionFinalsRef.current = "";
+      sessionCommittedRef.current = "";
       setVoiceTranscript("");
       setIsSubmitting(true);
+
+      if (wasListening && !usingFallbackRef.current) {
+        // Restart Web Speech session with empty e.results so the next spoken question starts fresh
+        startSpeechSession();
+      }
 
       addMessage({ id: aiMsgId, role: "assistant", text: "", isLoading: true });
 
@@ -531,7 +952,7 @@ export default function RAGPanel() {
             pdfUrl || undefined
           );
           answerText = res.answer;
-          citations = (res.citations || []).map((c: any) => ({
+          citations = (res.citations || []).map((c: Citation) => ({
             id: c.id || genId(),
             label: c.label || `Page ${c.page}`,
             page: c.page,
@@ -564,9 +985,9 @@ export default function RAGPanel() {
 
         // Auto-dictate answer
         dictateAnswer(aiMsgId, answerText);
-      } catch (err: any) {
+      } catch (err: unknown) {
         updateMessage(aiMsgId, {
-          text: `Could not retrieve answer: ${err.message || "Request failed"}`,
+          text: `Could not retrieve answer: ${getErrorMessage(err, "Request failed")}`,
           isLoading: false,
         });
       } finally {
@@ -582,253 +1003,108 @@ export default function RAGPanel() {
       dictateAnswer,
       paragraphs,
       pdfUrl,
-      safeStopRecognition,
+      disposeSpeechSession,
+      stopFallbackRecorder,
+      startSpeechSession,
     ]
   );
 
-  // Keep submitQuestionRef always current so recognition callbacks can call it
+  // Keep submitQuestionRef always current so async timers invoke the latest version
   useEffect(() => {
     submitQuestionRef.current = submitQuestion;
   }, [submitQuestion]);
 
   /* ─────────────────────────────────────────────────────────────────────────
-     Web Speech API – real-time voice typing
-     ─────────────────────────────────────────────────────────────────────────
-     State machine per recognition session:
-       START  → sessionFinalsRef = ""  (caller resets before safeStartRecognition)
-       onresult (loop from e.resultIndex):
-         • isFinal  → append to sessionFinalsRef
-         • interim  → stored in local var, NOT persisted in a ref
-         display = [baseTextRef, sessionFinalsRef, currentInterim].join(" ")
-       onend  → merge sessionFinalsRef into baseTextRef, reset sessionFinalsRef
-                restart if still active
-  ───────────────────────────────────────────────────────────────────────── */
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const SpeechRec =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRec) {
-      console.warn("SpeechRecognition not supported in this browser");
-      return;
-    }
-
-    const rec = new SpeechRec();
-    rec.continuous = true;
-    rec.interimResults = true;
-    rec.lang = "en-US";
-    rec.maxAlternatives = 1;
-
-    rec.onstart = () => {
-      console.log("[RIFT Voice] Recognition started ✅");
-      isRecognizingRef.current = true;
-      setIsMicActive(true);
-      setMicError(null);
-    };
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    rec.onresult = (e: any) => {
-      console.log("[RIFT Voice] onresult fired, resultIndex:", e.resultIndex, "results:", e.results.length);
-      /*
-       * CRITICAL: iterate from e.resultIndex (not 0).
-       * Chrome delivers ALL results on every event but advances resultIndex to
-       * point at the first NEW result. Only process from resultIndex onward so
-       * we never double-count previously finalised words.
-       */
-      let newFinals = "";
-      let currentInterim = "";
-
-      for (let i = e.resultIndex; i < e.results.length; ++i) {
-        const item = e.results[i];
-        const text = (item[0]?.transcript || "").trim();
-        if (!text) continue;
-
-        if (item.isFinal) {
-          newFinals = newFinals ? `${newFinals} ${text}` : text;
-        } else {
-          currentInterim = currentInterim ? `${currentInterim} ${text}` : text;
-        }
-      }
-
-      // Persist new finals into the session accumulator
-      if (newFinals) {
-        sessionFinalsRef.current = sessionFinalsRef.current
-          ? `${sessionFinalsRef.current} ${newFinals}`
-          : newFinals;
-      }
-
-      /*
-       * Build the full display string:
-       *   [text from past sessions] [finals this session] [live interim]
-       * Never overwrites what was typed/spoken before this session.
-       */
-      const parts = [
-        baseTextRef.current,
-        sessionFinalsRef.current,
-        currentInterim,
-      ].map((s) => s.trim()).filter(Boolean);
-      const fullText = parts.join(" ");
-
-      if (fullText) {
-        setInput(fullText);
-        currentInputRef.current = fullText;
-
-        // Show only the "live" portion in the floating transcript badge
-        const livePreview = currentInterim || sessionFinalsRef.current || fullText;
-        setVoiceTranscript(livePreview);
-
-        // Keep textarea scrolled to bottom as words flow in
-        if (inputRef.current) {
-          inputRef.current.scrollTop = inputRef.current.scrollHeight;
-        }
-
-        // In listening mode: auto-submit after 2.5 s of silence
-        if (isListeningModeActiveRef.current) {
-          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-          silenceTimerRef.current = setTimeout(() => {
-            if (isListeningModeActiveRef.current && currentInputRef.current.trim()) {
-              submitQuestionRef.current(currentInputRef.current.trim());
-            }
-          }, 2500);
-        }
-      }
-    };
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    rec.onerror = (e: any) => {
-      const errType = e?.error;
-      console.warn("[RIFT Voice] SpeechRec error:", errType);
-      // "no-speech" / "aborted" are normal – don't stop recording
-      if (errType === "no-speech" || errType === "aborted") return;
-
-      if (errType === "not-allowed" || errType === "service-not-allowed") {
-        setMicError("Microphone permission denied. Please allow mic access in your browser and reload.");
-        setIsRecordingOnce(false);
-        isRecordingOnceActiveRef.current = false;
-        setListeningMode(false);
-        isListeningModeActiveRef.current = false;
-        isRecognizingRef.current = false;
-        setIsMicActive(false);
-      } else if (errType === "audio-capture") {
-        setMicError("No microphone detected. Please connect a mic and try again.");
-        setIsRecordingOnce(false);
-        isRecordingOnceActiveRef.current = false;
-        setIsMicActive(false);
-      } else if (errType === "network") {
-        // Network error from Google's speech service – restart will handle it
-        console.warn("[RIFT Voice] Network error from speech service, will retry on restart");
-      }
-    };
-
-    rec.onend = () => {
-      console.log("[RIFT Voice] Recognition ended. Active?", isListeningModeActiveRef.current || isRecordingOnceActiveRef.current);
-      isRecognizingRef.current = false;
-      setIsMicActive(false);
-
-      /*
-       * Merge session finals into baseTextRef so the NEXT session starts
-       * from where this one finished. Reset sessionFinalsRef to avoid
-       * double-counting when the new session's onresult fires.
-       */
-      if (sessionFinalsRef.current.trim()) {
-        const merged = [baseTextRef.current, sessionFinalsRef.current]
-          .map((s) => s.trim())
-          .filter(Boolean)
-          .join(" ");
-        baseTextRef.current = merged;
-        sessionFinalsRef.current = "";
-      } else if (currentInputRef.current.trim()) {
-        // Fallback: nothing was finalised this session, keep whatever is visible
-        baseTextRef.current = currentInputRef.current.trim();
-      }
-
-      // Restart if voice input is still supposed to be active
-      if (isListeningModeActiveRef.current || isRecordingOnceActiveRef.current) {
-        if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
-        restartTimerRef.current = setTimeout(() => {
-          if (
-            (isListeningModeActiveRef.current || isRecordingOnceActiveRef.current) &&
-            !isRecognizingRef.current
-          ) {
-            try {
-              rec.start();
-              isRecognizingRef.current = true;
-            } catch (err: any) {
-              if (err.name !== "InvalidStateError") {
-                console.warn("SpeechRec restart error:", err);
-              }
-            }
-          }
-        }, 150);
-      }
-    };
-
-    recognitionRef.current = rec;
-
-    return () => {
-      try { rec.stop(); } catch { /* ignore */ }
-      isRecognizingRef.current = false;
-      setIsMicActive(false);
-      if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
-      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-    };
-  // Run once on mount – refs keep everything current
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  /* ─────────────────────────────────────────────────────────────────────────
      Toggle Listening Mode (continuous listen + auto-send)
   ───────────────────────────────────────────────────────────────────────── */
   const toggleListeningMode = useCallback(() => {
-    setListeningMode((prev) => {
-      const next = !prev;
-      isListeningModeActiveRef.current = next;
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+    if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+    if (editRestartTimerRef.current) clearTimeout(editRestartTimerRef.current);
 
-      if (next) {
-        // Fresh session – base = current textarea text, session finals = ""
-        baseTextRef.current = currentInputRef.current.trim();
-        sessionFinalsRef.current = "";
-        safeStartRecognition();
-      } else {
-        safeStopRecognition();
-        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-        if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
-        setIsMicActive(false);
-        setVoiceTranscript("");
+    if (activeModeRef.current === "listening") {
+      // Turn OFF listening mode
+      activeModeRef.current = "none";
+      setListeningMode(false);
+      if (sessionCommittedRef.current.trim()) {
+        baseTextRef.current = mergeWithBase(
+          baseTextRef.current,
+          sessionCommittedRef.current
+        );
+        sessionCommittedRef.current = "";
       }
-
-      return next;
-    });
-  }, [safeStartRecognition, safeStopRecognition]);
-
-  /* ─────────────────────────────────────────────────────────────────────────
-     Toggle One-Shot Voice Input (mic button)
-  ───────────────────────────────────────────────────────────────────────── */
-  const toggleVoiceInput = useCallback(() => {
-    // Mic button is a no-op while listening mode is running
-    if (listeningMode) return;
-
-    if (isRecordingOnceActiveRef.current) {
-      // Stop recording
-      setIsRecordingOnce(false);
-      isRecordingOnceActiveRef.current = false;
-      safeStopRecognition();
-      if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
-      // Commit current text as base so user can click mic again and continue
-      baseTextRef.current = currentInputRef.current.trim();
-      sessionFinalsRef.current = "";
-      setIsMicActive(false);
+      disposeSpeechSession(false);
+      setMicStatus("idle");
       setVoiceTranscript("");
     } else {
-      // Start recording – fresh session accumulator
-      setIsRecordingOnce(true);
-      isRecordingOnceActiveRef.current = true;
+      // If one-shot recording was active, cleanly stop it first
+      if (activeModeRef.current === "once") {
+        setIsRecordingOnce(false);
+        if (usingFallbackRef.current) {
+          void stopFallbackRecorder(true);
+        } else {
+          disposeSpeechSession(true);
+        }
+      }
+
+      setMicError(null);
+      usingFallbackRef.current = false;
+      networkErrorCountRef.current = 0;
       baseTextRef.current = currentInputRef.current.trim();
-      sessionFinalsRef.current = "";
-      safeStartRecognition();
+      sessionCommittedRef.current = "";
+      setVoiceTranscript("");
+      activeModeRef.current = "listening";
+      setListeningMode(true);
+      setMicStatus("starting");
+      startSpeechSession();
     }
-  }, [listeningMode, safeStartRecognition, safeStopRecognition]);
+  }, [disposeSpeechSession, mergeWithBase, startSpeechSession, stopFallbackRecorder]);
+
+  /* ─────────────────────────────────────────────────────────────────────────
+     Toggle One-Shot Voice Input (mic button inside input pill)
+  ───────────────────────────────────────────────────────────────────────── */
+  const toggleVoiceInput = useCallback(() => {
+    // Mic button does not interfere while continuous Listening Mode is ON
+    if (activeModeRef.current === "listening") return;
+
+    if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+    if (editRestartTimerRef.current) clearTimeout(editRestartTimerRef.current);
+
+    if (activeModeRef.current === "once") {
+      // Stop recording cleanly and preserve everything spoken so next start appends
+      activeModeRef.current = "none";
+      setIsRecordingOnce(false);
+
+      if (usingFallbackRef.current) {
+        void stopFallbackRecorder(false);
+      } else {
+        if (sessionCommittedRef.current.trim()) {
+          baseTextRef.current = mergeWithBase(
+            baseTextRef.current,
+            sessionCommittedRef.current
+          );
+          sessionCommittedRef.current = "";
+        } else {
+          baseTextRef.current = currentInputRef.current.trim();
+        }
+        disposeSpeechSession(false);
+        setMicStatus("idle");
+        setVoiceTranscript("");
+      }
+    } else {
+      // Start voice typing synchronously inside click gesture
+      setMicError(null);
+      usingFallbackRef.current = false;
+      networkErrorCountRef.current = 0;
+      baseTextRef.current = currentInputRef.current.trim();
+      sessionCommittedRef.current = "";
+      setVoiceTranscript("");
+      activeModeRef.current = "once";
+      setIsRecordingOnce(true);
+      setMicStatus("starting");
+      startSpeechSession();
+    }
+  }, [disposeSpeechSession, mergeWithBase, startSpeechSession, stopFallbackRecorder]);
 
   /* ─────────────────────────────────────────────────────────────────────────
      Citation click: navigate PDF viewer + transcript section
@@ -948,6 +1224,7 @@ export default function RAGPanel() {
 
         {/* Listening Mode Toggle */}
         <button
+          type="button"
           onClick={toggleListeningMode}
           style={{
             display: "flex",
@@ -1244,7 +1521,7 @@ export default function RAGPanel() {
           flexShrink: 0,
         }}
       >
-        {/* ── Mic permission error ── */}
+        {/* ── Mic permission / browser error ── */}
         {micError && (
           <div
             style={{
@@ -1261,49 +1538,74 @@ export default function RAGPanel() {
             }}
           >
             <span>⚠</span>
-            <span>{micError}</span>
+            <span style={{ flex: 1, lineHeight: "1.35" }}>{micError}</span>
             <button
+              type="button"
               onClick={() => setMicError(null)}
-              style={{ marginLeft: "auto", background: "none", border: "none", color: "#f87171", cursor: "pointer", fontSize: "11px" }}
-            >✕</button>
+              style={{
+                marginLeft: "auto",
+                background: "none",
+                border: "none",
+                color: "#f87171",
+                cursor: "pointer",
+                fontSize: "11px",
+              }}
+              aria-label="Dismiss microphone error"
+            >
+              ✕
+            </button>
           </div>
         )}
 
-        {/* ── Live speech preview (shows as soon as mic is on, not just when words arrive) ── */}
-        {(listeningMode || isRecordingOnce) && (
+        {/* ── Live speech preview (opens immediately when Mic / Listening is active) ── */}
+        {(listeningMode || isRecordingOnce || micStatus === "transcribing") && (
           <div
             style={{
               fontSize: "10.5px",
               fontFamily: "var(--font-mono)",
-              color: voiceTranscript ? "#38bdf8" : "#64748b",
-              fontStyle: "italic",
-              padding: "4px 8px",
+              color: voiceTranscript ? "#38bdf8" : "#94a3b8",
+              fontStyle: voiceTranscript ? "normal" : "italic",
+              padding: "5px 8px",
               background: voiceTranscript
                 ? "rgba(6, 182, 212, 0.08)"
-                : "rgba(255,255,255,0.03)",
-              borderRadius: "4px",
+                : "rgba(255, 255, 255, 0.04)",
+              borderRadius: "6px",
               border: voiceTranscript
-                ? "1px solid rgba(6, 182, 212, 0.2)"
-                : "1px solid rgba(255,255,255,0.06)",
+                ? "1px solid rgba(6, 182, 212, 0.25)"
+                : "1px solid rgba(255, 255, 255, 0.08)",
               display: "flex",
               alignItems: "center",
-              gap: "6px",
-              minHeight: "26px",
+              gap: "8px",
+              minHeight: "28px",
+              maxHeight: "64px",
+              overflowY: "auto",
               transition: "all 0.2s ease",
             }}
           >
-            <span
-              className="animate-pulse"
-              style={{ color: isMicActive ? "#22d3ee" : "#64748b", fontSize: "9px" }}
-            >
-              ●
-            </span>
-            {voiceTranscript ? (
-              <span>&ldquo;{voiceTranscript}&rdquo;</span>
-            ) : isMicActive ? (
-              <span style={{ color: "#64748b" }}>Mic active — speak now…</span>
+            <WaveformAnimation
+              active={
+                micStatus === "listening" ||
+                micStatus === "hearing" ||
+                micStatus === "fallback"
+              }
+              bars={6}
+              color={micStatus === "fallback" ? "#f87171" : "#22d3ee"}
+              height={14}
+            />
+            {micStatus === "transcribing" ? (
+              <span style={{ color: "#38bdf8" }}>Transcribing recorded speech…</span>
+            ) : voiceTranscript ? (
+              <span style={{ wordBreak: "break-word" }}>&ldquo;{voiceTranscript}&rdquo;</span>
+            ) : micStatus === "fallback" ? (
+              <span style={{ color: "#fca5a5" }}>
+                Recording audio — speak clearly, click Mic again to transcribe…
+              </span>
+            ) : micStatus === "hearing" ? (
+              <span style={{ color: "#38bdf8" }}>Hearing speech…</span>
+            ) : micStatus === "listening" ? (
+              <span style={{ color: "#94a3b8" }}>Mic active — speak now…</span>
             ) : (
-              <span style={{ color: "#475569" }}>Starting mic…</span>
+              <span style={{ color: "#64748b" }}>Starting microphone…</span>
             )}
           </div>
         )}
@@ -1316,7 +1618,11 @@ export default function RAGPanel() {
               display: "flex",
               alignItems: "center",
               borderRadius: "20px",
-              border: "1px solid rgba(255, 255, 255, 0.12)",
+              border: isRecordingOnce
+                ? "1px solid rgba(248, 113, 113, 0.5)"
+                : listeningMode
+                ? "1px solid rgba(34, 211, 238, 0.45)"
+                : "1px solid rgba(255, 255, 255, 0.12)",
               background: "rgba(15, 23, 42, 0.8)",
               padding: "0 10px",
               transition: "border-color 0.2s ease",
@@ -1329,10 +1635,28 @@ export default function RAGPanel() {
                 const val = e.target.value;
                 setInput(val);
                 currentInputRef.current = val;
-                // When user manually types, treat current content as the base
-                // so subsequent voice appends correctly after any edits
+                // Preserve manual edits as new base so voice continues after user typing
                 baseTextRef.current = val;
-                sessionFinalsRef.current = "";
+                sessionCommittedRef.current = "";
+
+                // If Web Speech is currently active, restart cleanly so old session
+                // e.results don't overwrite the user's manual edit
+                if (
+                  activeModeRef.current !== "none" &&
+                  !usingFallbackRef.current
+                ) {
+                  if (editRestartTimerRef.current) {
+                    clearTimeout(editRestartTimerRef.current);
+                  }
+                  editRestartTimerRef.current = setTimeout(() => {
+                    if (
+                      activeModeRef.current !== "none" &&
+                      !usingFallbackRef.current
+                    ) {
+                      startSpeechSession();
+                    }
+                  }, 250);
+                }
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
@@ -1365,6 +1689,7 @@ export default function RAGPanel() {
 
             {/* Mic button inside pill */}
             <button
+              type="button"
               onClick={toggleVoiceInput}
               style={{
                 width: "28px",
@@ -1392,7 +1717,7 @@ export default function RAGPanel() {
                 listeningMode
                   ? "Listening mode is currently on"
                   : isRecordingOnce
-                  ? "Stop recording"
+                  ? "Stop voice typing"
                   : "Click to speak question"
               }
             >
@@ -1402,6 +1727,7 @@ export default function RAGPanel() {
 
           {/* Send button */}
           <button
+            type="button"
             onClick={() => submitQuestion(input)}
             disabled={!input.trim() || isSubmitting}
             style={{
