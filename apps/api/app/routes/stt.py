@@ -69,6 +69,15 @@ async def transcribe_audio(file: UploadFile = File(...)):
                 ):
                     transcribed = transcribed[1:-1].strip()
 
+                # Filter out standard hallucinations on quiet/ambient clips
+                hallucinations = {
+                    "thank you", "thank you.", "thanks", "thanks.", "you", "you.",
+                    "bye", "bye.", "okay", "okay.", "so", "so.", "subtitles by", "watching",
+                    "yeah", "yeah.", "hello", "hello."
+                }
+                if transcribed.lower().strip() in hallucinations and len(audio_bytes) < 15000:
+                    transcribed = ""
+
                 logger.info(f"Gemini STT ({model_name}) transcribed {len(audio_bytes)} bytes -> {transcribed!r}")
                 return ApiResponse(
                     data=TranscriptionResponse(text=transcribed),

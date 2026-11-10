@@ -267,6 +267,7 @@ export default function RAGPanel() {
   const baseTextRef = useRef<string>("");
   const currentInputRef = useRef<string>("");
   const isRecognizingRef = useRef<boolean>(false);
+  const submitQuestionRef = useRef<(q: string) => Promise<void>>(async () => {});
 
   // Safe recognition start/stop helpers to prevent Chrome InvalidStateError
   const safeStartRecognition = useCallback(() => {
@@ -274,8 +275,11 @@ export default function RAGPanel() {
     if (isRecognizingRef.current) return;
     try {
       recognitionRef.current.start();
+      isRecognizingRef.current = true;
     } catch (err: any) {
-      if (err.name !== "InvalidStateError") {
+      if (err.name === "InvalidStateError") {
+        isRecognizingRef.current = true;
+      } else {
         console.warn("SpeechRec start error:", err);
       }
     }
@@ -518,6 +522,11 @@ export default function RAGPanel() {
     [activeDocId, isSubmitting, addMessage, updateMessage, navigateToParagraph, dictateAnswer, paragraphs, pdfUrl, safeStopRecognition]
   );
 
+  // Keep submitQuestionRef always synced with latest submitQuestion
+  useEffect(() => {
+    submitQuestionRef.current = submitQuestion;
+  }, [submitQuestion]);
+
   /* ── Helper to cleanly join base text with new voice segment ────────────── */
   const combineSpeechWithBase = useCallback((base: string, speech: string): string => {
     const cleanBase = base.trim();
@@ -533,12 +542,16 @@ export default function RAGPanel() {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRec) return;
+    if (!SpeechRec) {
+      console.warn("SpeechRecognition not supported in this browser");
+      return;
+    }
 
     const rec = new SpeechRec();
     rec.continuous = true;
     rec.interimResults = true;
     rec.lang = "en-US";
+    rec.maxAlternatives = 1;
 
     rec.onstart = () => {
       isRecognizingRef.current = true;
@@ -588,7 +601,7 @@ export default function RAGPanel() {
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
           silenceTimerRef.current = setTimeout(() => {
             if (isListeningModeActiveRef.current && currentInputRef.current.trim()) {
-              submitQuestion(currentInputRef.current.trim());
+              submitQuestionRef.current(currentInputRef.current.trim());
             }
           }, 2500);
         }
@@ -630,6 +643,7 @@ export default function RAGPanel() {
           ) {
             try {
               rec.start();
+              isRecognizingRef.current = true;
             } catch (err: any) {
               if (err.name !== "InvalidStateError") {
                 console.warn("SpeechRec restart error:", err);
@@ -650,74 +664,42 @@ export default function RAGPanel() {
       if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
     };
-  }, [submitQuestion, combineSpeechWithBase]);
+  }, [combineSpeechWithBase]);
 
   // Toggle Listening Mode (continuous listening & auto-send)
-  const toggleListeningMode = useCallback(async () => {
+  const toggleListeningMode = useCallback(() => {
     setListeningMode((prev) => {
       const next = !prev;
       isListeningModeActiveRef.current = next;
       if (next) {
         baseTextRef.current = currentInputRef.current.trim();
-        getCleanMicStream().then(() => {
-          safeStartRecognition();
-        });
+        safeStartRecognition();
       } else {
         safeStopRecognition();
         if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
         if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
-        if (micStreamRef.current) {
-          micStreamRef.current.getTracks().forEach((t) => t.stop());
-          micStreamRef.current = null;
-        }
       }
       return next;
     });
-  }, [getCleanMicStream, safeStartRecognition, safeStopRecognition]);
+  }, [safeStartRecognition, safeStopRecognition]);
 
-  // One-shot Voice Input Toggle (voice typing with continuous append & Gemini Flash STT fallback)
-  const toggleVoiceInput = useCallback(async () => {
+  // One-shot Voice Input Toggle (voice typing with continuous append via Web Speech API)
+  const toggleVoiceInput = useCallback(() => {
     if (listeningMode) return; // listening mode is already continuously on
 
-    if (isRecordingOnce) {
+    if (isRecordingOnceActiveRef.current) {
       setIsRecordingOnce(false);
       isRecordingOnceActiveRef.current = false;
       safeStopRecognition();
       if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
-
-      // If Web Speech API didn't produce text, fallback to Gemini Flash STT
-      const fallbackText = await stopMediaRecordingAndTranscribe();
-      if (fallbackText) {
-        const cur = currentInputRef.current.trim();
-        const base = baseTextRef.current.trim();
-        if (!cur || cur === base) {
-          const combined = combineSpeechWithBase(base, fallbackText);
-          setInput(combined);
-          currentInputRef.current = combined;
-          baseTextRef.current = combined;
-          setVoiceTranscript(fallbackText);
-        }
-      }
       baseTextRef.current = currentInputRef.current.trim();
     } else {
       setIsRecordingOnce(true);
       isRecordingOnceActiveRef.current = true;
       baseTextRef.current = currentInputRef.current.trim();
-
-      await getCleanMicStream();
-      startMediaRecording();
       safeStartRecognition();
     }
-  }, [
-    listeningMode,
-    isRecordingOnce,
-    getCleanMicStream,
-    startMediaRecording,
-    stopMediaRecordingAndTranscribe,
-    safeStartRecognition,
-    safeStopRecognition,
-    combineSpeechWithBase,
-  ]);
+  }, [listeningMode, safeStartRecognition, safeStopRecognition]);
 
   // Citation click handler: navigates PDF viewer and highlights corresponding transcript section
   const handleCitationClick = useCallback(
