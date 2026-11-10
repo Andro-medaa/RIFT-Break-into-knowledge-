@@ -264,7 +264,8 @@ export default function RAGPanel() {
   const audioChunksRef = useRef<Blob[]>([]);
   const isListeningModeActiveRef = useRef(false);
   const isRecordingOnceActiveRef = useRef(false);
-  const baseTextRef = useRef<string>("");
+  const baseTextRef = useRef<string>(""); // text from all PREVIOUS recognition sessions
+  const sessionFinalsRef = useRef<string>(""); // finals committed within the CURRENT session
   const currentInputRef = useRef<string>("");
   const isRecognizingRef = useRef<boolean>(false);
   const submitQuestionRef = useRef<(q: string) => Promise<void>>(async () => {});
@@ -559,32 +560,35 @@ export default function RAGPanel() {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rec.onresult = (e: any) => {
-      let sessionFinal = "";
-      let sessionInterim = "";
+      // Only process NEW results starting from e.resultIndex to avoid re-processing old ones
+      let newFinals = "";
+      let currentInterim = "";
 
-      // Accumulate across all results in this session from 0 to e.results.length - 1
-      for (let i = 0; i < e.results.length; ++i) {
+      for (let i = e.resultIndex; i < e.results.length; ++i) {
         const item = e.results[i];
         const text = item[0]?.transcript || "";
         if (item.isFinal) {
-          if (sessionFinal && !sessionFinal.endsWith(" ") && !text.startsWith(" ")) {
-            sessionFinal += " ";
-          }
-          sessionFinal += text;
+          newFinals += (newFinals ? " " : "") + text.trim();
         } else {
-          if (sessionInterim && !sessionInterim.endsWith(" ") && !text.startsWith(" ")) {
-            sessionInterim += " ";
-          }
-          sessionInterim += text;
+          currentInterim += (currentInterim ? " " : "") + text.trim();
         }
       }
 
-      const finalTrimmed = sessionFinal.trim();
-      const interimTrimmed = sessionInterim.trim();
-      const sessionSpeech = [finalTrimmed, interimTrimmed].filter(Boolean).join(" ");
+      // Append any new finals into the session finals accumulator
+      if (newFinals) {
+        sessionFinalsRef.current = sessionFinalsRef.current
+          ? sessionFinalsRef.current + " " + newFinals
+          : newFinals;
+      }
 
-      // Seamlessly join with existing text so previous speech is NEVER overwritten
-      const fullText = combineSpeechWithBase(baseTextRef.current, sessionSpeech);
+      // Build display: everything before this session + session finals + current interim
+      const parts = [
+        baseTextRef.current.trim(),
+        sessionFinalsRef.current.trim(),
+        currentInterim.trim(),
+      ].filter(Boolean);
+      const fullText = parts.join(" ");
+      const sessionSpeech = currentInterim.trim() || sessionFinalsRef.current.trim();
 
       if (fullText) {
         setInput(fullText);
@@ -628,8 +632,14 @@ export default function RAGPanel() {
     rec.onend = () => {
       isRecognizingRef.current = false;
 
-      // Commit whatever text was accumulated into baseTextRef so the next utterance continues typing where previous ended
-      if (currentInputRef.current.trim()) {
+      // On session end: merge session finals into baseTextRef, then reset session finals
+      // This way the next session picks up exactly where we left off (no double-counting)
+      if (sessionFinalsRef.current.trim()) {
+        const parts = [baseTextRef.current.trim(), sessionFinalsRef.current.trim()].filter(Boolean);
+        baseTextRef.current = parts.join(" ");
+        sessionFinalsRef.current = "";
+      } else if (currentInputRef.current.trim()) {
+        // Fallback: if no finals were tracked via resultIndex, use currentInputRef
         baseTextRef.current = currentInputRef.current.trim();
       }
 
@@ -673,6 +683,7 @@ export default function RAGPanel() {
       isListeningModeActiveRef.current = next;
       if (next) {
         baseTextRef.current = currentInputRef.current.trim();
+        sessionFinalsRef.current = ""; // reset session accumulator for fresh start
         safeStartRecognition();
       } else {
         safeStopRecognition();
@@ -697,6 +708,7 @@ export default function RAGPanel() {
       setIsRecordingOnce(true);
       isRecordingOnceActiveRef.current = true;
       baseTextRef.current = currentInputRef.current.trim();
+      sessionFinalsRef.current = ""; // reset session accumulator for fresh start
       safeStartRecognition();
     }
   }, [listeningMode, safeStartRecognition, safeStopRecognition]);
