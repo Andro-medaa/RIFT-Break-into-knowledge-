@@ -9,6 +9,15 @@
  * - One voice input button (mic)
  * - One send button
  * - NO mode switcher tabs
+ *
+ * Voice Input Architecture (Web Speech API):
+ * - baseTextRef      : text accumulated from all previous recognition sessions
+ * - sessionFinalsRef : finals committed within the CURRENT active session
+ * - currentInterim   : live word(s) in progress, updated each onresult event
+ * - Display = baseTextRef + sessionFinalsRef + currentInterim  (no double-counting)
+ * - On onend: sessionFinalsRef is merged into baseTextRef, then reset to ""
+ * - On new session start: sessionFinalsRef is reset to ""
+ * - e.resultIndex used in onresult so only NEW events are processed each call
  */
 "use client";
 
@@ -41,11 +50,14 @@ import { useWorkspace } from "@/lib/workspace";
 import type { Citation, RAGMessage } from "@/lib/workspace";
 import WaveformAnimation from "./WaveformAnimation";
 
+/* ─────────────────────────────────────────────────────────────────────────────
+   Helpers
+───────────────────────────────────────────────────────────────────────────── */
 function genId() {
   return Math.random().toString(36).slice(2);
 }
 
-/* ── Blinking stream cursor ─────────────────────────────────────────────────── */
+/* ── Blinking stream cursor ───────────────────────────────────────────────── */
 function StreamCursor() {
   return (
     <span
@@ -63,7 +75,7 @@ function StreamCursor() {
   );
 }
 
-/* ── Wavebars thinking indicator ─────────────────────────────────────────────── */
+/* ── Wavebars thinking indicator ──────────────────────────────────────────── */
 function ThinkingWave() {
   return (
     <div style={{ display: "flex", alignItems: "flex-end", gap: "2px", height: "16px" }}>
@@ -83,7 +95,7 @@ function ThinkingWave() {
   );
 }
 
-/* ── ElevenLabs Word-by-Word Karaoke Highlighting for Answers ───────────────── */
+/* ── ElevenLabs Word-by-Word Karaoke Highlighting for Answers ─────────────── */
 function AnswerKaraokeText({
   text,
   wordsTimeline,
@@ -101,7 +113,8 @@ function AnswerKaraokeText({
     return (
       <div style={{ lineHeight: "1.7", fontSize: "13px" }}>
         {wordsTimeline.map((item, idx) => {
-          const isCurrent = isPlaying && currentTime >= item.start && currentTime <= item.end + 0.05;
+          const isCurrent =
+            isPlaying && currentTime >= item.start && currentTime <= item.end + 0.05;
           const isPast = currentTime > item.end;
 
           return (
@@ -140,10 +153,12 @@ function AnswerKaraokeText({
     );
   }
 
-  return <div style={{ lineHeight: "1.7", fontSize: "13px", color: "#f1f5f9" }}>{text}</div>;
+  return (
+    <div style={{ lineHeight: "1.7", fontSize: "13px", color: "#f1f5f9" }}>{text}</div>
+  );
 }
 
-/* ── Citation Chip: PDF (cyan) / Web (indigo) ─────────────────────────────────── */
+/* ── Citation Chip: PDF (cyan) / Web (indigo) ────────────────────────────── */
 function CitationChip({
   citation,
   onNavigate,
@@ -164,8 +179,12 @@ function CitationChip({
           gap: "5px",
           padding: "3px 8px",
           borderRadius: "6px",
-          border: isWeb ? "1px solid rgba(99, 102, 241, 0.4)" : "1px solid rgba(6, 182, 212, 0.35)",
-          background: isWeb ? "rgba(99, 102, 241, 0.15)" : "rgba(6, 182, 212, 0.12)",
+          border: isWeb
+            ? "1px solid rgba(99, 102, 241, 0.4)"
+            : "1px solid rgba(6, 182, 212, 0.35)",
+          background: isWeb
+            ? "rgba(99, 102, 241, 0.15)"
+            : "rgba(6, 182, 212, 0.12)",
           color: isWeb ? "#a5b4fc" : "#38bdf8",
           fontSize: "10.5px",
           fontFamily: "var(--font-mono)",
@@ -180,7 +199,7 @@ function CitationChip({
         {citation.label}
       </button>
 
-      {/* Tooltip with snippet or url */}
+      {/* Tooltip with snippet or URL */}
       {showTooltip && (
         <div
           style={{
@@ -204,10 +223,19 @@ function CitationChip({
             <div style={{ wordBreak: "break-all" }}>{citation.url}</div>
           ) : (
             <div>
-              <div style={{ fontWeight: 600, color: "#38bdf8" }}>Jump to Page {citation.page} in PDF</div>
+              <div style={{ fontWeight: 600, color: "#38bdf8" }}>
+                Jump to Page {citation.page} in PDF
+              </div>
               {citation.snippet && (
-                <div style={{ fontSize: "9px", color: "#94a3b8", marginTop: "3px", lineHeight: "1.4" }}>
-                  &ldquo;{citation.snippet.slice(0, 110)}…&rdquo;
+                <div
+                  style={{
+                    fontSize: "9px",
+                    color: "#94a3b8",
+                    marginTop: "3px",
+                    lineHeight: "1.4",
+                  }}
+                >
+                  &ldquo;{citation.snippet.slice(0, 110)}&hellip;&rdquo;
                 </div>
               )}
             </div>
@@ -218,9 +246,9 @@ function CitationChip({
   );
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════════
    Main RAGPanel Component
-════════════════════════════════════════════════════════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════════ */
 export default function RAGPanel() {
   const params = useParams();
   const docId = (params?.docId as string) || (params?.id as string) || "";
@@ -239,7 +267,7 @@ export default function RAGPanel() {
 
   const activeDocId = docId || workspaceDocId || "";
 
-  // Input & state
+  /* ── UI state ─────────────────────────────────────────────────────────── */
   const [input, setInput] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [listeningMode, setListeningMode] = useState(false);
@@ -248,29 +276,43 @@ export default function RAGPanel() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const listEndRef = useRef<HTMLDivElement>(null);
 
-  // Audio dictation for answers
+  /* ── ElevenLabs dictation state ───────────────────────────────────────── */
   const answerAudioRef = useRef<HTMLAudioElement | null>(null);
   const [dictatingMsgId, setDictatingMsgId] = useState<string | null>(null);
   const [answerCurrentTime, setAnswerCurrentTime] = useState(0);
   const [answerTimeline, setAnswerTimeline] = useState<WordTimestamp[]>([]);
 
-  // Speech Recognition & Hardware Audio refs
+  /* ── Speech Recognition refs ──────────────────────────────────────────── */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isRecognizingRef = useRef<boolean>(false);
+  const isListeningModeActiveRef = useRef(false);
+  const isRecordingOnceActiveRef = useRef(false);
+
+  /**
+   * Voice text accumulation:
+   *   baseTextRef      – all text from PREVIOUS recognition sessions (survives onend)
+   *   sessionFinalsRef – finals received in the CURRENT session (reset on new session start
+   *                      and merged into baseTextRef on onend)
+   *   currentInputRef  – the full visible text currently in the textarea
+   */
+  const baseTextRef = useRef<string>("");
+  const sessionFinalsRef = useRef<string>("");
+  const currentInputRef = useRef<string>("");
+
+  /* ── MediaRecorder refs (kept for future fallback use) ────────────────── */
   const micStreamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-  const isListeningModeActiveRef = useRef(false);
-  const isRecordingOnceActiveRef = useRef(false);
-  const baseTextRef = useRef<string>(""); // text from all PREVIOUS recognition sessions
-  const sessionFinalsRef = useRef<string>(""); // finals committed within the CURRENT session
-  const currentInputRef = useRef<string>("");
-  const isRecognizingRef = useRef<boolean>(false);
+
+  /* ── submitQuestion ref so speech callbacks always call latest version ── */
   const submitQuestionRef = useRef<(q: string) => Promise<void>>(async () => {});
 
-  // Safe recognition start/stop helpers to prevent Chrome InvalidStateError
+  /* ─────────────────────────────────────────────────────────────────────────
+     Safe start / stop helpers (guard against Chrome InvalidStateError)
+  ───────────────────────────────────────────────────────────────────────── */
   const safeStartRecognition = useCallback(() => {
     if (!recognitionRef.current) return;
     if (isRecognizingRef.current) return;
@@ -279,6 +321,7 @@ export default function RAGPanel() {
       isRecognizingRef.current = true;
     } catch (err: any) {
       if (err.name === "InvalidStateError") {
+        // Already running – treat as started
         isRecognizingRef.current = true;
       } else {
         console.warn("SpeechRec start error:", err);
@@ -290,20 +333,25 @@ export default function RAGPanel() {
     if (!recognitionRef.current) return;
     try {
       recognitionRef.current.stop();
-    } catch {}
+    } catch {
+      /* ignore */
+    }
     isRecognizingRef.current = false;
   }, []);
 
-  // Auto-scroll message list
+  /* ─────────────────────────────────────────────────────────────────────────
+     Auto-scroll message list
+  ───────────────────────────────────────────────────────────────────────── */
   useEffect(() => {
     listEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, dictatingMsgId]);
 
-  /* ── Dictate AI Answer with ElevenLabs ─────────────────────────────────── */
+  /* ─────────────────────────────────────────────────────────────────────────
+     ElevenLabs Answer Dictation
+  ───────────────────────────────────────────────────────────────────────── */
   const dictateAnswer = useCallback(
     async (msgId: string, text: string) => {
       if (dictatingMsgId === msgId) {
-        // Toggle pause/stop
         answerAudioRef.current?.pause();
         setDictatingMsgId(null);
         return;
@@ -311,7 +359,10 @@ export default function RAGPanel() {
 
       setDictatingMsgId(msgId);
       try {
-        const cleanText = text.replace(/\[\d+\]/g, "").replace(/§[^\n]+/g, "").trim();
+        const cleanText = text
+          .replace(/\[\d+\]/g, "")
+          .replace(/§[^\n]+/g, "")
+          .trim();
         const tts = await synthesizeElevenLabs(cleanText, selectedElevenVoice);
         if (!tts || !tts.audio_base64) {
           setDictatingMsgId(null);
@@ -327,7 +378,6 @@ export default function RAGPanel() {
         if (!answerAudioRef.current) {
           answerAudioRef.current = new Audio();
         }
-
         const audio = answerAudioRef.current;
         audio.src = url;
         setAnswerTimeline(tts.words || []);
@@ -336,16 +386,13 @@ export default function RAGPanel() {
         audio.onloadedmetadata = () => {
           audio.play().catch(() => setDictatingMsgId(null));
         };
-
         audio.ontimeupdate = () => {
           setAnswerCurrentTime(audio.currentTime);
         };
-
         audio.onended = () => {
           setDictatingMsgId(null);
           setAnswerTimeline([]);
         };
-
         audio.onerror = () => {
           setDictatingMsgId(null);
         };
@@ -357,7 +404,9 @@ export default function RAGPanel() {
     [dictatingMsgId, selectedElevenVoice]
   );
 
-  /* ── Acquire Clean Hardware Audio Stream ────────────────────────────────── */
+  /* ─────────────────────────────────────────────────────────────────────────
+     Clean mic stream acquisition (echo/noise suppression)
+  ───────────────────────────────────────────────────────────────────────── */
   const getCleanMicStream = useCallback(async () => {
     if (micStreamRef.current && micStreamRef.current.active) {
       return micStreamRef.current;
@@ -375,29 +424,32 @@ export default function RAGPanel() {
       micStreamRef.current = stream;
       return stream;
     } catch (err) {
-      console.warn("Could not acquire audio stream with constraints:", err);
+      console.warn("Could not acquire audio stream:", err);
       return null;
     }
   }, []);
 
-  /* ── MediaRecorder Fallback Audio Buffering ─────────────────────────────── */
-  const startMediaRecording = useCallback(async () => {
-    try {
-      const stream = await getCleanMicStream();
-      if (!stream) return;
-      audioChunksRef.current = [];
-      const mr = new MediaRecorder(stream, { mimeType: "audio/webm" });
-      mr.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) {
-          audioChunksRef.current.push(e.data);
-        }
-      };
-      mr.start(250);
-      mediaRecorderRef.current = mr;
-    } catch (err) {
-      console.warn("MediaRecorder start error:", err);
-    }
-  }, [getCleanMicStream]);
+  /* ─────────────────────────────────────────────────────────────────────────
+     MediaRecorder (kept for fallback / future use)
+  ───────────────────────────────────────────────────────────────────────── */
+  const startMediaRecording = useCallback(
+    async () => {
+      try {
+        const stream = await getCleanMicStream();
+        if (!stream) return;
+        audioChunksRef.current = [];
+        const mr = new MediaRecorder(stream, { mimeType: "audio/webm" });
+        mr.ondataavailable = (e) => {
+          if (e.data && e.data.size > 0) audioChunksRef.current.push(e.data);
+        };
+        mr.start(250);
+        mediaRecorderRef.current = mr;
+      } catch (err) {
+        console.warn("MediaRecorder start error:", err);
+      }
+    },
+    [getCleanMicStream]
+  );
 
   const stopMediaRecordingAndTranscribe = useCallback(async (): Promise<string> => {
     return new Promise((resolve) => {
@@ -408,31 +460,23 @@ export default function RAGPanel() {
       }
       mr.onstop = async () => {
         try {
-          if (audioChunksRef.current.length === 0) {
-            resolve("");
-            return;
-          }
+          if (audioChunksRef.current.length === 0) { resolve(""); return; }
           const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
           audioChunksRef.current = [];
-          if (blob.size < 500) {
-            resolve("");
-            return;
-          }
+          if (blob.size < 500) { resolve(""); return; }
           const text = await transcribeAudio(blob);
           resolve(text);
         } catch {
           resolve("");
         }
       };
-      try {
-        mr.stop();
-      } catch {
-        resolve("");
-      }
+      try { mr.stop(); } catch { resolve(""); }
     });
   }, []);
 
-  /* ── Handle Question Submission ────────────────────────────────────────── */
+  /* ─────────────────────────────────────────────────────────────────────────
+     Question submission
+  ───────────────────────────────────────────────────────────────────────── */
   const submitQuestion = useCallback(
     async (q: string) => {
       const trimmed = q.trim();
@@ -441,7 +485,7 @@ export default function RAGPanel() {
       const userMsgId = genId();
       const aiMsgId = genId();
 
-      // If one-shot recording was active, stop recording upon sending
+      // Stop one-shot recording if active
       if (isRecordingOnceActiveRef.current) {
         setIsRecordingOnce(false);
         isRecordingOnceActiveRef.current = false;
@@ -455,22 +499,25 @@ export default function RAGPanel() {
       setInput("");
       currentInputRef.current = "";
       baseTextRef.current = "";
+      sessionFinalsRef.current = "";
       setVoiceTranscript("");
       setIsSubmitting(true);
 
-      addMessage({
-        id: aiMsgId,
-        role: "assistant",
-        text: "",
-        isLoading: true,
-      });
+      addMessage({ id: aiMsgId, role: "assistant", text: "", isLoading: true });
 
       try {
         let answerText = "";
         let citations: Citation[] = [];
 
         if (activeDocId) {
-          const res = await queryDocument(activeDocId, trimmed, undefined, undefined, paragraphs, pdfUrl || undefined);
+          const res = await queryDocument(
+            activeDocId,
+            trimmed,
+            undefined,
+            undefined,
+            paragraphs,
+            pdfUrl || undefined
+          );
           answerText = res.answer;
           citations = (res.citations || []).map((c: any) => ({
             id: c.id || genId(),
@@ -485,18 +532,12 @@ export default function RAGPanel() {
           }));
         } else {
           answerText = `Here is the explanation for "${trimmed}". Click any source citation chip below to navigate the document in real time.`;
-          citations = [
-            { id: "c-1", label: "§ Page 1 · Overview", page: 1 },
-          ];
+          citations = [{ id: "c-1", label: "§ Page 1 · Overview", page: 1 }];
         }
 
-        updateMessage(aiMsgId, {
-          text: answerText,
-          citations,
-          isLoading: false,
-        });
+        updateMessage(aiMsgId, { text: answerText, citations, isLoading: false });
 
-        // Auto-scroll to first cited PDF paragraph with bbox
+        // Auto-scroll to first PDF citation with bbox
         const firstPdfCit = citations.find((c) => !c.url && (c.bbox || c.paragraphId));
         if (firstPdfCit) {
           if (firstPdfCit.bbox && firstPdfCit.page) {
@@ -509,7 +550,7 @@ export default function RAGPanel() {
           }
         }
 
-        // Auto-start dictation using active transcript voice with word-level highlighting
+        // Auto-dictate answer
         dictateAnswer(aiMsgId, answerText);
       } catch (err: any) {
         updateMessage(aiMsgId, {
@@ -520,29 +561,42 @@ export default function RAGPanel() {
         setIsSubmitting(false);
       }
     },
-    [activeDocId, isSubmitting, addMessage, updateMessage, navigateToParagraph, dictateAnswer, paragraphs, pdfUrl, safeStopRecognition]
+    [
+      activeDocId,
+      isSubmitting,
+      addMessage,
+      updateMessage,
+      navigateToParagraph,
+      dictateAnswer,
+      paragraphs,
+      pdfUrl,
+      safeStopRecognition,
+    ]
   );
 
-  // Keep submitQuestionRef always synced with latest submitQuestion
+  // Keep submitQuestionRef always current so recognition callbacks can call it
   useEffect(() => {
     submitQuestionRef.current = submitQuestion;
   }, [submitQuestion]);
 
-  /* ── Helper to cleanly join base text with new voice segment ────────────── */
-  const combineSpeechWithBase = useCallback((base: string, speech: string): string => {
-    const cleanBase = base.trim();
-    const cleanSpeech = speech.trim();
-    if (!cleanBase) return cleanSpeech;
-    if (!cleanSpeech) return cleanBase;
-    return `${cleanBase} ${cleanSpeech}`;
-  }, []);
-
-  /* ── Speech Recognition & Continuous Voice Typing Setup ─────────────────── */
+  /* ─────────────────────────────────────────────────────────────────────────
+     Web Speech API – real-time voice typing
+     ─────────────────────────────────────────────────────────────────────────
+     State machine per recognition session:
+       START  → sessionFinalsRef = ""  (caller resets before safeStartRecognition)
+       onresult (loop from e.resultIndex):
+         • isFinal  → append to sessionFinalsRef
+         • interim  → stored in local var, NOT persisted in a ref
+         display = [baseTextRef, sessionFinalsRef, currentInterim].join(" ")
+       onend  → merge sessionFinalsRef into baseTextRef, reset sessionFinalsRef
+                restart if still active
+  ───────────────────────────────────────────────────────────────────────── */
   useEffect(() => {
     if (typeof window === "undefined") return;
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const SpeechRec =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SpeechRec) {
       console.warn("SpeechRecognition not supported in this browser");
       return;
@@ -560,47 +614,60 @@ export default function RAGPanel() {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rec.onresult = (e: any) => {
-      // Only process NEW results starting from e.resultIndex to avoid re-processing old ones
+      /*
+       * CRITICAL: iterate from e.resultIndex (not 0).
+       * Chrome delivers ALL results on every event but advances resultIndex to
+       * point at the first NEW result. Only process from resultIndex onward so
+       * we never double-count previously finalised words.
+       */
       let newFinals = "";
       let currentInterim = "";
 
       for (let i = e.resultIndex; i < e.results.length; ++i) {
         const item = e.results[i];
-        const text = item[0]?.transcript || "";
+        const text = (item[0]?.transcript || "").trim();
+        if (!text) continue;
+
         if (item.isFinal) {
-          newFinals += (newFinals ? " " : "") + text.trim();
+          newFinals = newFinals ? `${newFinals} ${text}` : text;
         } else {
-          currentInterim += (currentInterim ? " " : "") + text.trim();
+          currentInterim = currentInterim ? `${currentInterim} ${text}` : text;
         }
       }
 
-      // Append any new finals into the session finals accumulator
+      // Persist new finals into the session accumulator
       if (newFinals) {
         sessionFinalsRef.current = sessionFinalsRef.current
-          ? sessionFinalsRef.current + " " + newFinals
+          ? `${sessionFinalsRef.current} ${newFinals}`
           : newFinals;
       }
 
-      // Build display: everything before this session + session finals + current interim
+      /*
+       * Build the full display string:
+       *   [text from past sessions] [finals this session] [live interim]
+       * Never overwrites what was typed/spoken before this session.
+       */
       const parts = [
-        baseTextRef.current.trim(),
-        sessionFinalsRef.current.trim(),
-        currentInterim.trim(),
-      ].filter(Boolean);
+        baseTextRef.current,
+        sessionFinalsRef.current,
+        currentInterim,
+      ].map((s) => s.trim()).filter(Boolean);
       const fullText = parts.join(" ");
-      const sessionSpeech = currentInterim.trim() || sessionFinalsRef.current.trim();
 
       if (fullText) {
         setInput(fullText);
         currentInputRef.current = fullText;
-        setVoiceTranscript(sessionSpeech || fullText);
 
-        // Keep textarea scrolled to the end as words are spoken
+        // Show only the "live" portion in the floating transcript badge
+        const livePreview = currentInterim || sessionFinalsRef.current || fullText;
+        setVoiceTranscript(livePreview);
+
+        // Keep textarea scrolled to bottom as words flow in
         if (inputRef.current) {
           inputRef.current.scrollTop = inputRef.current.scrollHeight;
         }
 
-        // In continuous listening mode, auto-submit after user finishes speaking (2.5s silence)
+        // In listening mode: auto-submit after 2.5 s of silence
         if (isListeningModeActiveRef.current) {
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
           silenceTimerRef.current = setTimeout(() => {
@@ -615,10 +682,9 @@ export default function RAGPanel() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rec.onerror = (e: any) => {
       const errType = e?.error;
-      // Normal speech pauses or aborts must not cancel recording
-      if (errType === "no-speech" || errType === "aborted") {
-        return;
-      }
+      // "no-speech" / "aborted" are normal – don't stop recording
+      if (errType === "no-speech" || errType === "aborted") return;
+
       console.warn("SpeechRec error:", errType);
       if (errType === "not-allowed" || errType === "service-not-allowed") {
         setIsRecordingOnce(false);
@@ -632,18 +698,24 @@ export default function RAGPanel() {
     rec.onend = () => {
       isRecognizingRef.current = false;
 
-      // On session end: merge session finals into baseTextRef, then reset session finals
-      // This way the next session picks up exactly where we left off (no double-counting)
+      /*
+       * Merge session finals into baseTextRef so the NEXT session starts
+       * from where this one finished. Reset sessionFinalsRef to avoid
+       * double-counting when the new session's onresult fires.
+       */
       if (sessionFinalsRef.current.trim()) {
-        const parts = [baseTextRef.current.trim(), sessionFinalsRef.current.trim()].filter(Boolean);
-        baseTextRef.current = parts.join(" ");
+        const merged = [baseTextRef.current, sessionFinalsRef.current]
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .join(" ");
+        baseTextRef.current = merged;
         sessionFinalsRef.current = "";
       } else if (currentInputRef.current.trim()) {
-        // Fallback: if no finals were tracked via resultIndex, use currentInputRef
+        // Fallback: nothing was finalised this session, keep whatever is visible
         baseTextRef.current = currentInputRef.current.trim();
       }
 
-      // If continuous listening or one-shot voice typing is still active, restart smoothly
+      // Restart if voice input is still supposed to be active
       if (isListeningModeActiveRef.current || isRecordingOnceActiveRef.current) {
         if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
         restartTimerRef.current = setTimeout(() => {
@@ -660,60 +732,74 @@ export default function RAGPanel() {
               }
             }
           }
-        }, 200);
+        }, 150);
       }
     };
 
     recognitionRef.current = rec;
 
     return () => {
-      try {
-        rec.stop();
-      } catch {}
+      try { rec.stop(); } catch { /* ignore */ }
       isRecognizingRef.current = false;
       if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
     };
-  }, [combineSpeechWithBase]);
+  // Run once on mount – refs keep everything current
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // Toggle Listening Mode (continuous listening & auto-send)
+  /* ─────────────────────────────────────────────────────────────────────────
+     Toggle Listening Mode (continuous listen + auto-send)
+  ───────────────────────────────────────────────────────────────────────── */
   const toggleListeningMode = useCallback(() => {
     setListeningMode((prev) => {
       const next = !prev;
       isListeningModeActiveRef.current = next;
+
       if (next) {
+        // Fresh session – base = current textarea text, session finals = ""
         baseTextRef.current = currentInputRef.current.trim();
-        sessionFinalsRef.current = ""; // reset session accumulator for fresh start
+        sessionFinalsRef.current = "";
         safeStartRecognition();
       } else {
         safeStopRecognition();
         if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
         if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
       }
+
       return next;
     });
   }, [safeStartRecognition, safeStopRecognition]);
 
-  // One-shot Voice Input Toggle (voice typing with continuous append via Web Speech API)
+  /* ─────────────────────────────────────────────────────────────────────────
+     Toggle One-Shot Voice Input (mic button)
+  ───────────────────────────────────────────────────────────────────────── */
   const toggleVoiceInput = useCallback(() => {
-    if (listeningMode) return; // listening mode is already continuously on
+    // Mic button is a no-op while listening mode is running
+    if (listeningMode) return;
 
     if (isRecordingOnceActiveRef.current) {
+      // Stop recording
       setIsRecordingOnce(false);
       isRecordingOnceActiveRef.current = false;
       safeStopRecognition();
       if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+      // Commit current text as base so user can click mic again and continue
       baseTextRef.current = currentInputRef.current.trim();
+      sessionFinalsRef.current = "";
     } else {
+      // Start recording – fresh session accumulator
       setIsRecordingOnce(true);
       isRecordingOnceActiveRef.current = true;
       baseTextRef.current = currentInputRef.current.trim();
-      sessionFinalsRef.current = ""; // reset session accumulator for fresh start
+      sessionFinalsRef.current = "";
       safeStartRecognition();
     }
   }, [listeningMode, safeStartRecognition, safeStopRecognition]);
 
-  // Citation click handler: navigates PDF viewer and highlights corresponding transcript section
+  /* ─────────────────────────────────────────────────────────────────────────
+     Citation click: navigate PDF viewer + transcript section
+  ───────────────────────────────────────────────────────────────────────── */
   const handleCitationClick = useCallback(
     (cit: Citation) => {
       if (cit.url) {
@@ -725,7 +811,7 @@ export default function RAGPanel() {
       let targetBbox = cit.bbox;
       let targetId = cit.paragraphId || cit.id;
 
-      // If citation doesn't have an explicit bbox, search paragraphs for matching text or id
+      // Try to resolve bbox from paragraphs array when not explicitly provided
       if (!targetBbox && paragraphs && paragraphs.length > 0) {
         const matchingPara =
           paragraphs.find((p) => p.id === targetId) ||
@@ -742,21 +828,18 @@ export default function RAGPanel() {
       }
 
       if (targetBbox && targetPage) {
-        navigateToParagraph(targetId, {
-          page: targetPage,
-          ...targetBbox,
-        });
+        navigateToParagraph(targetId, { page: targetPage, ...targetBbox });
       } else {
         navigateToParagraph(targetId);
       }
 
       setCurrentPage(targetPage);
-      const el = document.getElementById(`pdf-page-${targetPage}`);
-      if (el) {
-        el.scrollIntoView({ behavior: "smooth", block: "start" });
-      }
 
-      // Also scroll the transcript section to this paragraph if rendered
+      // Scroll PDF page into view
+      const pdfEl = document.getElementById(`pdf-page-${targetPage}`);
+      if (pdfEl) pdfEl.scrollIntoView({ behavior: "smooth", block: "start" });
+
+      // Scroll transcript section to this paragraph
       const transEl =
         document.getElementById(`transcript-para-${targetId}`) ||
         document.getElementById(`transcript-seg-${targetId}`) ||
@@ -766,6 +849,9 @@ export default function RAGPanel() {
     [paragraphs, navigateToParagraph, setCurrentPage]
   );
 
+  /* ═══════════════════════════════════════════════════════════════════════
+     Render
+  ═══════════════════════════════════════════════════════════════════════ */
   return (
     <div
       className="glass-panel"
@@ -783,7 +869,7 @@ export default function RAGPanel() {
         overflow: "hidden",
       }}
     >
-      {/* ── Header Row: Title + Status + Listening Mode Toggle ── */}
+      {/* ── Header: Title + Listening Mode Toggle ─────────────────────── */}
       <div
         style={{
           display: "flex",
@@ -827,7 +913,7 @@ export default function RAGPanel() {
 
         <div style={{ flex: 1 }} />
 
-        {/* Single Listening Mode Toggle Button */}
+        {/* Listening Mode Toggle */}
         <button
           onClick={toggleListeningMode}
           style={{
@@ -861,7 +947,7 @@ export default function RAGPanel() {
         </button>
       </div>
 
-      {/* ── Message List ── */}
+      {/* ── Message List ──────────────────────────────────────────────── */}
       <div
         style={{
           flex: 1,
@@ -874,6 +960,7 @@ export default function RAGPanel() {
         }}
       >
         {messages.length === 0 ? (
+          /* Empty state */
           <div
             style={{
               flex: 1,
@@ -906,13 +993,27 @@ export default function RAGPanel() {
                 Grounded PDF Intelligence
               </div>
               <div style={{ fontSize: "11px", color: "#64748b", maxWidth: "260px" }}>
-                Type or speak a question. Answers are cross-grounded with PDF chunks and web citations.
+                Type or speak a question. Answers are cross-grounded with PDF chunks and
+                web citations.
               </div>
             </div>
 
             {/* Quick starter chips */}
-            <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "8px", width: "100%", maxWidth: "280px" }}>
-              {["Summarize the key findings", "What are the main methodology steps?", "Explain conclusions"].map((q) => (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "6px",
+                marginTop: "8px",
+                width: "100%",
+                maxWidth: "280px",
+              }}
+            >
+              {[
+                "Summarize the key findings",
+                "What are the main methodology steps?",
+                "Explain conclusions",
+              ].map((q) => (
                 <button
                   key={q}
                   onClick={() => submitQuestion(q)}
@@ -928,12 +1029,16 @@ export default function RAGPanel() {
                     transition: "all 0.15s ease",
                   }}
                   onMouseEnter={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.background = "rgba(6, 182, 212, 0.15)";
-                    (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(34, 211, 238, 0.3)";
+                    (e.currentTarget as HTMLButtonElement).style.background =
+                      "rgba(6, 182, 212, 0.15)";
+                    (e.currentTarget as HTMLButtonElement).style.borderColor =
+                      "rgba(34, 211, 238, 0.3)";
                   }}
                   onMouseLeave={(e) => {
-                    (e.currentTarget as HTMLButtonElement).style.background = "rgba(255, 255, 255, 0.04)";
-                    (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(255, 255, 255, 0.08)";
+                    (e.currentTarget as HTMLButtonElement).style.background =
+                      "rgba(255, 255, 255, 0.04)";
+                    (e.currentTarget as HTMLButtonElement).style.borderColor =
+                      "rgba(255, 255, 255, 0.08)";
                   }}
                 >
                   § {q}
@@ -942,6 +1047,7 @@ export default function RAGPanel() {
             </div>
           </div>
         ) : (
+          /* Message bubbles */
           messages.map((msg) => {
             const isUser = msg.role === "user";
             const isDictating = dictatingMsgId === msg.id;
@@ -970,7 +1076,9 @@ export default function RAGPanel() {
                   style={{
                     maxWidth: "92%",
                     padding: "10px 13px",
-                    borderRadius: isUser ? "16px 4px 16px 16px" : "4px 16px 16px 16px",
+                    borderRadius: isUser
+                      ? "16px 4px 16px 16px"
+                      : "4px 16px 16px 16px",
                     background: isUser
                       ? "linear-gradient(135deg, rgba(79, 70, 229, 0.3), rgba(30, 27, 75, 0.6))"
                       : "linear-gradient(135deg, rgba(8, 47, 73, 0.5), rgba(15, 23, 42, 0.8))",
@@ -998,7 +1106,9 @@ export default function RAGPanel() {
                         height: "22px",
                         borderRadius: "5px",
                         border: "none",
-                        background: isDictating ? "rgba(6, 182, 212, 0.3)" : "rgba(255, 255, 255, 0.06)",
+                        background: isDictating
+                          ? "rgba(6, 182, 212, 0.3)"
+                          : "rgba(255, 255, 255, 0.06)",
                         color: isDictating ? "#22d3ee" : "#64748b",
                         cursor: "pointer",
                         display: "flex",
@@ -1012,10 +1122,23 @@ export default function RAGPanel() {
                   )}
 
                   {msg.isLoading ? (
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "4px 0" }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "8px",
+                        padding: "4px 0",
+                      }}
+                    >
                       <ThinkingWave />
-                      <span style={{ fontSize: "11px", color: "#38bdf8", fontFamily: "var(--font-mono)" }}>
-                        Synthesizing grounded answer…
+                      <span
+                        style={{
+                          fontSize: "11px",
+                          color: "#38bdf8",
+                          fontFamily: "var(--font-mono)",
+                        }}
+                      >
+                        Synthesizing grounded answer&hellip;
                       </span>
                     </div>
                   ) : isDictating ? (
@@ -1037,24 +1160,38 @@ export default function RAGPanel() {
                 </div>
 
                 {/* Sources / Citations row */}
-                {!isUser && !msg.isLoading && msg.citations && msg.citations.length > 0 && (
-                  <div
-                    style={{
-                      display: "flex",
-                      flexWrap: "wrap",
-                      gap: "5px",
-                      marginTop: "3px",
-                      paddingLeft: "2px",
-                    }}
-                  >
-                    <span style={{ fontSize: "9.5px", fontFamily: "var(--font-mono)", color: "#64748b", alignSelf: "center" }}>
-                      Sources:
-                    </span>
-                    {msg.citations.map((c) => (
-                      <CitationChip key={c.id} citation={c} onNavigate={handleCitationClick} />
-                    ))}
-                  </div>
-                )}
+                {!isUser &&
+                  !msg.isLoading &&
+                  msg.citations &&
+                  msg.citations.length > 0 && (
+                    <div
+                      style={{
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: "5px",
+                        marginTop: "3px",
+                        paddingLeft: "2px",
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: "9.5px",
+                          fontFamily: "var(--font-mono)",
+                          color: "#64748b",
+                          alignSelf: "center",
+                        }}
+                      >
+                        Sources:
+                      </span>
+                      {msg.citations.map((c) => (
+                        <CitationChip
+                          key={c.id}
+                          citation={c}
+                          onNavigate={handleCitationClick}
+                        />
+                      ))}
+                    </div>
+                  )}
               </div>
             );
           })
@@ -1062,7 +1199,7 @@ export default function RAGPanel() {
         <div ref={listEndRef} />
       </div>
 
-      {/* ── Unified Input Row: ONE text box + ONE voice input button + ONE send button ── */}
+      {/* ── Input Row: text box + mic + send ──────────────────────────── */}
       <div
         style={{
           borderTop: "1px solid rgba(255, 255, 255, 0.08)",
@@ -1074,7 +1211,7 @@ export default function RAGPanel() {
           flexShrink: 0,
         }}
       >
-        {/* Live speech preview if user is speaking */}
+        {/* Live speech preview badge */}
         {(listeningMode || isRecordingOnce) && voiceTranscript && (
           <div
             style={{
@@ -1096,7 +1233,7 @@ export default function RAGPanel() {
         )}
 
         <div style={{ display: "flex", gap: "6px", alignItems: "flex-end" }}>
-          {/* Main Text Input Pill */}
+          {/* Text input pill */}
           <div
             style={{
               flex: 1,
@@ -1116,7 +1253,10 @@ export default function RAGPanel() {
                 const val = e.target.value;
                 setInput(val);
                 currentInputRef.current = val;
+                // When user manually types, treat current content as the base
+                // so subsequent voice appends correctly after any edits
                 baseTextRef.current = val;
+                sessionFinalsRef.current = "";
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
@@ -1147,7 +1287,7 @@ export default function RAGPanel() {
               }}
             />
 
-            {/* Voice Input Button inside pill */}
+            {/* Mic button inside pill */}
             <button
               onClick={toggleVoiceInput}
               style={{
@@ -1160,7 +1300,11 @@ export default function RAGPanel() {
                   : listeningMode
                   ? "rgba(6, 182, 212, 0.2)"
                   : "transparent",
-                color: isRecordingOnce ? "#f87171" : listeningMode ? "#22d3ee" : "#94a3b8",
+                color: isRecordingOnce
+                  ? "#f87171"
+                  : listeningMode
+                  ? "#22d3ee"
+                  : "#94a3b8",
                 cursor: "pointer",
                 display: "flex",
                 alignItems: "center",
@@ -1180,7 +1324,7 @@ export default function RAGPanel() {
             </button>
           </div>
 
-          {/* Send Button */}
+          {/* Send button */}
           <button
             onClick={() => submitQuestion(input)}
             disabled={!input.trim() || isSubmitting}
@@ -1204,10 +1348,14 @@ export default function RAGPanel() {
             }}
             title="Send query"
           >
-            {isSubmitting ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
+            {isSubmitting ? (
+              <Loader2 size={13} className="animate-spin" />
+            ) : (
+              <Send size={13} />
+            )}
           </button>
         </div>
       </div>
-    </div>              
+    </div>
   );
 }
