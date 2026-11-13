@@ -23,6 +23,130 @@ import { CheckCircle2 } from "lucide-react";
 import PDFViewer from "./PDFViewer";
 import TranscriptPanel from "./TranscriptPanel";
 import RAGPanel from "./RAGPanel";
+import RoadmapPopover from "./RoadmapPopover";
+import TopBarControls from "./TopBarControls";
+
+interface PageBox {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+function capHorizontalPadding(
+  a: PageBox,
+  pad: { l: number; r: number },
+  n: PageBox,
+  factor: number,
+  maxPadY: number,
+  minGap: number,
+  touchTol: number
+) {
+  const yOverlaps =
+    n.y0 - maxPadY < a.y1 + maxPadY && a.y0 - maxPadY < n.y1 + maxPadY;
+  if (!yOverlaps) return;
+  if (n.x0 >= a.x1 - touchTol && n.x1 > a.x1) {
+    pad.r = Math.min(pad.r, Math.max(0, (n.x0 - a.x1 - minGap) * factor));
+  }
+  if (n.x1 <= a.x0 + touchTol && n.x0 < a.x0) {
+    pad.l = Math.min(pad.l, Math.max(0, (a.x0 - n.x1 - minGap) * factor));
+  }
+}
+
+function capVerticalPadding(
+  a: PageBox,
+  pad: { l: number; r: number; t: number; b: number },
+  n: PageBox,
+  factor: number,
+  minGap: number,
+  touchTol: number,
+  peerPadL = 0,
+  peerPadR = 0
+) {
+  const xOverlaps = n.x0 - peerPadL < a.x1 + pad.r && a.x0 - pad.l < n.x1 + peerPadR;
+  if (!xOverlaps) return;
+  if (n.y0 >= a.y1 - touchTol && n.y1 > a.y1) {
+    pad.b = Math.min(pad.b, Math.max(0, (n.y0 - a.y1 - minGap) * factor));
+  }
+  if (n.y1 <= a.y0 + touchTol && n.y0 < a.y0) {
+    pad.t = Math.min(pad.t, Math.max(0, (a.y0 - n.y1 - minGap) * factor));
+  }
+}
+
+/**
+ * Expand each text box dynamically into free surrounding whitespace while capping expansion
+ * so neighboring chunks and surrounding text obstacles are never overlapped or covered.
+ */
+export function computeContextAwareNormBBoxes(
+  boxes: PageBox[],
+  obstacles: PageBox[],
+  pageW: number,
+  pageH: number
+): Array<{ x: number; y: number; w: number; h: number }> {
+  if (boxes.length === 0) return [];
+  if (pageW <= 0 || pageH <= 0) {
+    return boxes.map(() => ({ x: 0, y: 0, w: 1, h: 1 }));
+  }
+
+  const maxPadX = Math.max(2.0, 0.0082 * pageW);
+  const maxPadY = Math.max(1.5, 0.0055 * pageW);
+  const minGap = Math.max(0.8, 0.0024 * pageW);
+  const touchTol = Math.max(1.0, 0.003 * pageW);
+
+  const pads = boxes.map((r) => ({
+    l: Math.min(maxPadX, Math.max(0, r.x0)),
+    r: Math.min(maxPadX, Math.max(0, pageW - r.x1)),
+    t: Math.min(maxPadY, Math.max(0, r.y0)),
+    b: Math.min(maxPadY, Math.max(0, pageH - r.y1)),
+  }));
+
+  // Pass 1: horizontal caps so adjacent columns remain horizontally isolated.
+  for (let i = 0; i < boxes.length; i++) {
+    for (let j = 0; j < boxes.length; j++) {
+      if (i === j) continue;
+      capHorizontalPadding(boxes[i], pads[i], boxes[j], 0.5, maxPadY, minGap, touchTol);
+    }
+    for (const obs of obstacles) {
+      capHorizontalPadding(boxes[i], pads[i], obs, 1.0, maxPadY, minGap, touchTol);
+    }
+  }
+
+  // Pass 2: vertical caps using actual Pass-1 padded horizontal intervals.
+  for (let i = 0; i < boxes.length; i++) {
+    for (let j = 0; j < boxes.length; j++) {
+      if (i === j) continue;
+      capVerticalPadding(
+        boxes[i],
+        pads[i],
+        boxes[j],
+        0.5,
+        minGap,
+        touchTol,
+        pads[j].l,
+        pads[j].r
+      );
+    }
+    for (const obs of obstacles) {
+      capVerticalPadding(boxes[i], pads[i], obs, 1.0, minGap, touchTol);
+    }
+  }
+
+  return boxes.map((r, i) => {
+    const p = pads[i];
+    const nx = Math.max(0, Math.min(1, (r.x0 - p.l) / pageW));
+    const ny = Math.max(0, Math.min(1, (r.y0 - p.t) / pageH));
+    const nx1 = Math.max(nx, Math.min(1, (r.x1 + p.r) / pageW));
+    const ny1 = Math.max(ny, Math.min(1, (r.y1 + p.b) / pageH));
+    const nw = Math.min(1 - nx, Math.max(0.002, nx1 - nx));
+    const nh = Math.min(1 - ny, Math.max(0.002, ny1 - ny));
+    return {
+      x: Math.round(nx * 10000) / 10000,
+      y: Math.round(ny * 10000) / 10000,
+      w: Math.round(nw * 10000) / 10000,
+      h: Math.round(nh * 10000) / 10000,
+    };
+  });
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════════
    Auto-extract transcript paragraphs from PDF via PDF.js or Backend Chunks
@@ -94,19 +218,20 @@ function TranscriptExtractor({ documentId }: { documentId?: string }) {
               height: number;
             };
             const itemH = Math.abs(it.height) || Math.hypot(it.transform[2], it.transform[3]) || 12;
+            const descender = itemH * 0.2;
             const tx = it.transform[4];
             const ty = it.transform[5];
 
             let vx0 = tx;
             let vy0 = viewport.height - ty - itemH;
             let vx1 = tx + it.width;
-            let vy1 = viewport.height - ty;
+            let vy1 = viewport.height - ty + descender;
 
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const vp = viewport as any;
             if (typeof vp.convertToViewportRectangle === "function") {
               try {
-                const rect = vp.convertToViewportRectangle([tx, ty, tx + it.width, ty + itemH]);
+                const rect = vp.convertToViewportRectangle([tx, ty - descender, tx + it.width, ty + itemH]);
                 if (Array.isArray(rect) && rect.length === 4) {
                   [vx0, vy0, vx1, vy1] = rect;
                 }
@@ -114,7 +239,7 @@ function TranscriptExtractor({ documentId }: { documentId?: string }) {
             } else if (typeof vp.convertToViewportPoint === "function") {
               try {
                 const p0 = vp.convertToViewportPoint(tx, ty + itemH);
-                const p1 = vp.convertToViewportPoint(tx + it.width, ty);
+                const p1 = vp.convertToViewportPoint(tx + it.width, ty - descender);
                 if (Array.isArray(p0) && Array.isArray(p1)) {
                   [vx0, vy0] = p0;
                   [vx1, vy1] = p1;
@@ -206,7 +331,7 @@ function TranscriptExtractor({ documentId }: { documentId?: string }) {
 
             const shouldMerge =
               sameCol &&
-              gap >= -2 &&
+              gap >= -6 &&
               gap < 14 &&
               (!prevEndsSentence || currStartsCont) &&
               !isHeading;
@@ -222,32 +347,42 @@ function TranscriptExtractor({ documentId }: { documentId?: string }) {
             }
           }
 
-          // 5. Convert to normalized TranscriptParagraphs
+          // 5. Filter noise into fixed obstacles and pad kept paragraphs cleanly around surrounding text
+          const keptParas: Array<{ text: string; box: PageBox }> = [];
+          const obstacles: PageBox[] = [];
           for (const m of mergedParas) {
             const cleanText = m.text.replace(/\s+/g, " ").trim();
-            if (cleanText.length < 3) continue;
+            const box: PageBox = { x0: m.x0, y0: m.y0, x1: m.x1, y1: m.y1 };
+            if (cleanText.length < 3) {
+              obstacles.push(box);
+              continue;
+            }
 
-            // Filter out recurring header/footer elements
+            // Filter out recurring header/footer elements while keeping their rects as padding obstacles
             const ny = m.y0 / viewport.height;
             const nBottom = m.y1 / viewport.height;
-            if ((ny < 0.04 || nBottom > 0.96) && cleanText.length < 40) continue;
+            if ((ny < 0.04 || nBottom > 0.96) && cleanText.length < 40) {
+              obstacles.push(box);
+              continue;
+            }
 
-            // Small breathing room in point space so bounding box doesn't touch or clip glyphs
-            const nx = Math.max(0, Math.min(1, (m.x0 - 2) / viewport.width));
-            const normY = Math.max(0, Math.min(1, (m.y0 - 2) / viewport.height));
-            const nw = Math.max(0.01, Math.min(1 - nx, (m.x1 - m.x0 + 4) / viewport.width));
-            const nh = Math.max(0.01, Math.min(1 - normY, (m.y1 - m.y0 + 4) / viewport.height));
+            keptParas.push({ text: cleanText, box });
+          }
 
+          const normBoxes = computeContextAwareNormBBoxes(
+            keptParas.map((k) => k.box),
+            obstacles,
+            viewport.width,
+            viewport.height
+          );
+          for (let i = 0; i < keptParas.length; i++) {
             paras.push({
               id: `p-${globalIdx}`,
               index: globalIdx,
-              text: cleanText,
+              text: keptParas[i].text,
               bbox: {
                 page: p,
-                x: Math.round(nx * 10000) / 10000,
-                y: Math.round(normY * 10000) / 10000,
-                w: Math.round(nw * 10000) / 10000,
-                h: Math.round(nh * 10000) / 10000,
+                ...normBoxes[i],
               },
             });
             globalIdx++;
@@ -330,9 +465,9 @@ function ColumnDivider({
           height: isActive ? "80%" : "50%",
           borderRadius: "9999px",
           background: isActive
-            ? "rgba(139, 92, 246, 0.9)"
+            ? "rgba(0, 245, 212, 0.9)"
             : "rgba(255, 255, 255, 0.12)",
-          boxShadow: isActive ? "0 0 10px rgba(139, 92, 246, 0.7)" : "none",
+          boxShadow: isActive ? "0 0 12px rgba(0, 245, 212, 0.8)" : "none",
           transition: "all 0.15s ease",
         }}
       />
@@ -428,57 +563,8 @@ function Layout({ documentId }: { documentId?: string }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%", minHeight: 0 }}>
-      {/* ── Roadmap portal → rendered into top bar ── */}
-      {portalTarget && withBoxCount > 0 && createPortal(
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "6px",
-          }}
-        >
-          <CheckCircle2 size={12} color="#06b6d4" />
-          <span
-            style={{
-              fontSize: "9.5px",
-              fontFamily: "var(--font-mono)",
-              color: "#67e8f9",
-              letterSpacing: "0.08em",
-            }}
-          >
-            ROADMAP
-          </span>
-          <div
-            style={{
-              width: "70px",
-              height: "4px",
-              borderRadius: "2px",
-              background: "rgba(255,255,255,0.08)",
-              overflow: "hidden",
-            }}
-          >
-            <div
-              style={{
-                width: `${coveragePct}%`,
-                height: "100%",
-                background: "linear-gradient(90deg, #06b6d4, #10b981)",
-                borderRadius: "2px",
-                transition: "width 0.4s ease",
-              }}
-            />
-          </div>
-          <span
-            style={{
-              fontSize: "9.5px",
-              fontFamily: "var(--font-mono)",
-              color: "#10b981",
-            }}
-          >
-            {coveragePct}%
-          </span>
-        </div>,
-        portalTarget
-      )}
+      {/* ── Top bar controls portal → rendered into top bar where roadmap text exists ── */}
+      {portalTarget && createPortal(<TopBarControls />, portalTarget)}
 
     <div
       ref={containerRef}
@@ -552,12 +638,18 @@ function Layout({ documentId }: { documentId?: string }) {
 export default function WorkspaceLayout({
   pdfUrl,
   documentId,
+  initialInstruction,
 }: {
   pdfUrl: string;
   documentId?: string;
+  initialInstruction?: string | null;
 }) {
   return (
-    <WorkspaceProvider initialPdfUrl={pdfUrl} initialDocumentId={documentId}>
+    <WorkspaceProvider
+      initialPdfUrl={pdfUrl}
+      initialDocumentId={documentId}
+      initialInstruction={initialInstruction}
+    >
       <Layout documentId={documentId} />
     </WorkspaceProvider>
   );

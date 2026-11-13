@@ -12,6 +12,7 @@ export interface Document {
   file_size: number;
   mime_type: string;
   created_at?: string | null;
+  instruction?: string | null;
 }
 
 /** Upload response from the API. */

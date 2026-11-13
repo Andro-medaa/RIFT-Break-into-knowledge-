@@ -33,10 +33,10 @@ const WorkspaceLayout = dynamic(
           flexDirection: "column",
           gap: "14px",
           color: "var(--text-secondary)",
-          background: "rgba(15, 23, 42, 0.75)",
+          background: "rgba(3, 8, 12, 0.88)",
           backdropFilter: "blur(20px)",
           borderRadius: "20px",
-          border: "1px solid rgba(255, 255, 255, 0.08)",
+          border: "1px solid rgba(0, 245, 212, 0.15)",
         }}
       >
         <div
@@ -44,14 +44,14 @@ const WorkspaceLayout = dynamic(
             width: "44px",
             height: "44px",
             borderRadius: "50%",
-            border: "2px solid rgba(99, 102, 241, 0.25)",
-            borderTopColor: "var(--accent-indigo)",
+            border: "2px solid rgba(0, 245, 212, 0.25)",
+            borderTopColor: "var(--accent-cyan)",
             animation: "spin 0.8s linear infinite",
           }}
         />
         <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
         <div style={{ display: "flex", alignItems: "center", gap: "8px", fontFamily: "var(--font-heading)" }}>
-          <Sparkles size={15} color="#38bdf8" />
+          <Sparkles size={15} color="#00f5d4" />
           <span>Loading 3-Section Workspace…</span>
         </div>
       </div>
@@ -105,9 +105,9 @@ export default function ChatPageContent({
           justifyContent: "center",
           flexDirection: "column",
           gap: "16px",
-          background: "radial-gradient(ellipse at 50% 30%, rgba(15, 23, 42, 0.9), #07090e)",
+          background: "radial-gradient(ellipse at 50% 30%, rgba(3, 22, 26, 0.92), #020406)",
           borderRadius: "20px",
-          border: "1px solid rgba(255, 255, 255, 0.08)",
+          border: "1px solid rgba(0, 245, 212, 0.15)",
           color: "var(--text-secondary)",
         }}
       >
@@ -116,14 +116,14 @@ export default function ChatPageContent({
             width: "48px",
             height: "48px",
             borderRadius: "50%",
-            border: "2px solid rgba(99, 102, 241, 0.25)",
-            borderTopColor: "var(--accent-indigo)",
+            border: "2px solid rgba(0, 245, 212, 0.25)",
+            borderTopColor: "var(--accent-cyan)",
             animation: "spin 0.8s linear infinite",
           }}
         />
         <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
         <div style={{ display: "flex", alignItems: "center", gap: "8px", fontFamily: "var(--font-heading)" }}>
-          <Sparkles size={16} color="#38bdf8" />
+          <Sparkles size={16} color="#00f5d4" />
           <span>Opening Document Workspace…</span>
         </div>
       </div>
@@ -141,7 +141,7 @@ export default function ChatPageContent({
           justifyContent: "center",
           flexDirection: "column",
           gap: "16px",
-          background: "rgba(15, 23, 42, 0.8)",
+          background: "rgba(3, 8, 12, 0.90)",
           borderRadius: "20px",
           border: "1px solid rgba(244, 63, 94, 0.3)",
           color: "var(--text-secondary)",
@@ -156,9 +156,9 @@ export default function ChatPageContent({
           className="btn-tool"
           style={{
             padding: "10px 24px",
-            background: "rgba(99, 102, 241, 0.2)",
-            borderColor: "rgba(99, 102, 241, 0.4)",
-            color: "#e0e7ff",
+            background: "rgba(0, 245, 212, 0.15)",
+            borderColor: "rgba(0, 245, 212, 0.35)",
+            color: "#5eead4",
           }}
         >
           ← Return to Home
@@ -194,13 +194,15 @@ export default function ChatPageContent({
           justifyContent: "space-between",
           padding: "8px 14px",
           borderRadius: "14px",
-          background: "rgba(15, 23, 42, 0.75)",
-          backdropFilter: "blur(16px)",
-          WebkitBackdropFilter: "blur(16px)",
-          border: "1px solid rgba(255, 255, 255, 0.08)",
-          boxShadow: "0 4px 20px rgba(0, 0, 0, 0.35)",
+          background: "rgba(3, 8, 12, 0.90)",
+          backdropFilter: "blur(20px)",
+          WebkitBackdropFilter: "blur(20px)",
+          border: "1px solid rgba(0, 245, 212, 0.14)",
+          boxShadow: "0 4px 20px rgba(0, 0, 0, 0.65)",
           flexShrink: 0,
           height: "46px",
+          position: "relative",
+          zIndex: 1000,
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
@@ -225,7 +227,7 @@ export default function ChatPageContent({
           </button>
 
           <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
-            <BookOpen size={15} color="#8b5cf6" style={{ flexShrink: 0 }} />
+            <BookOpen size={15} color="#00f5d4" style={{ flexShrink: 0 }} />
             <span
               style={{
                 fontSize: "13.5px",
@@ -243,12 +245,16 @@ export default function ChatPageContent({
         </div>
 
         {/* Portal target for Roadmap indicator rendered from WorkspaceLayout */}
-        <div id="rift-topbar-right" style={{ display: "flex", alignItems: "center", gap: "10px", flexShrink: 0 }} />
+        <div id="rift-topbar-right" style={{ display: "flex", alignItems: "center", gap: "10px", flexShrink: 0, position: "relative" }} />
       </div>
 
       {/* ── 3-Panel Workspace: fills remaining height, zero page scroll ── */}
       <div style={{ flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden" }}>
-        <WorkspaceLayout pdfUrl={doc.file_url} documentId={doc.id} />
+        <WorkspaceLayout
+          pdfUrl={doc.file_url}
+          documentId={doc.id}
+          initialInstruction={doc.instruction}
+        />
       </div>
     </motion.div>
   );

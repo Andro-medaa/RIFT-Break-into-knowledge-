@@ -167,8 +167,8 @@ def plan_lesson(
             f"Generate the complete structured spoken lesson plan according to the pedagogical moves."
         )
 
-        # Attempt with gemini-2.5-flash or gemini-2.0-flash / gemini-1.5-flash
-        model_name = "gemini-2.5-flash"
+        # Attempt with gemini-3.5-flash or gemini-2.0-flash / gemini-1.5-flash
+        model_name = "gemini-3.5-flash"
         
         response = client.models.generate_content(
             model=model_name,

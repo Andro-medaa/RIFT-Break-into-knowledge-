@@ -338,6 +338,14 @@ class StorageService:
             except Exception as exc:
                 logger.warning(f"Database deletion failed: {exc}")
 
+        # Clean up persisted user instructions and cached scripts for this document
+        try:
+            from app.services.script import script_service
+
+            script_service.clear_document_artifacts(document_id)
+        except Exception as exc:
+            logger.warning(f"Cleanup of script artifacts failed for {document_id}: {exc}")
+
         return True
 
 

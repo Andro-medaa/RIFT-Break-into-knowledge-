@@ -7,7 +7,7 @@
  *   Stage 2 (send):  User clicks the Send (↑) button → upload starts →
  *     on success navigate to /chat/[docId].
  *
- * Cosmic Obsidian & Violet Glass Theme:
+ * Deep Teal & Dark Jet Black Glass Theme:
  * ┌─────────────────────────────────────────────────────┬──────┐
  * │  "Write all Instructions"  (top-left, 20px light)   │      │
  * │  ── selected-file chip when a PDF is chosen ──      │  →   │
@@ -41,6 +41,7 @@ export default function UploadBox() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const [instruction, setInstruction] = useState("");
   const [isDragOver, setIsDragOver] = useState(false);
@@ -146,25 +147,23 @@ export default function UploadBox() {
         minWidth: "340px",
         borderRadius: "26px",
         border: isDragOver
-          ? "1.5px solid #38bdf8"
+          ? "1.5px solid #00f5d4"
           : isBoxHovered
-          ? "1.5px solid rgba(139, 92, 246, 0.55)"
+          ? "1.5px solid rgba(0, 245, 212, 0.65)"
           : hasFile
-          ? "1.5px solid rgba(139, 92, 246, 0.42)"
-          : "1.5px solid rgba(99, 102, 241, 0.35)",
+          ? "1.5px solid rgba(0, 245, 212, 0.45)"
+          : "1.5px solid rgba(13, 148, 136, 0.38)",
         background: isDragOver
-          ? "rgba(6, 182, 212, 0.08)"
+          ? "rgba(0, 245, 212, 0.14)"
           : isBoxHovered
-          ? "rgba(18, 24, 38, 0.88)"
-          : "rgba(13, 17, 27, 0.8)",
-        backdropFilter: "blur(16px)",
-        WebkitBackdropFilter: "blur(16px)",
+          ? "rgba(4, 12, 18, 0.96)"
+          : "rgba(2, 7, 10, 0.93)",
         boxShadow: isDragOver
-          ? "0 0 28px rgba(6, 182, 212, 0.35)"
+          ? "0 0 32px rgba(0, 245, 212, 0.45)"
           : isBoxHovered
-          ? "0 14px 36px rgba(0, 0, 0, 0.6), 0 0 24px rgba(139, 92, 246, 0.22)"
-          : "0 10px 30px rgba(0, 0, 0, 0.5)",
-        transition: "all 0.25s cubic-bezier(0.16, 1, 0.3, 1)",
+          ? "0 18px 45px rgba(0, 0, 0, 0.85), 0 0 28px rgba(0, 245, 212, 0.22)"
+          : "0 12px 35px rgba(0, 0, 0, 0.75)",
+        transition: "border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease",
         position: "relative",
         overflow: "hidden",
       }}
@@ -185,30 +184,42 @@ export default function UploadBox() {
           minWidth: 0,
         }}
       >
-        {/* Instruction text */}
-        <input
-          type="text"
+        {/* Instruction text (supports multi-line coverage, tone, style, sequence rules) */}
+        <textarea
+          ref={textareaRef}
+          rows={1}
           value={instruction}
-          onChange={(e) => setInstruction(e.target.value)}
+          onChange={(e) => {
+            setInstruction(e.target.value);
+            const el = textareaRef.current;
+            if (el) {
+              el.style.height = "auto";
+              el.style.height = `${Math.min(el.scrollHeight, 136)}px`;
+            }
+          }}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && canSend) {
+            if (e.key === "Enter" && !e.shiftKey && canSend) {
               e.preventDefault();
               handleSend();
             }
           }}
-          placeholder="Write all Instructions (optional)"
+          placeholder="Write all instructions — coverage, tone, style, sequence… (optional)"
           disabled={isBusy}
           style={{
             background: "transparent",
             border: "none",
             outline: "none",
-            fontSize: "20px",
-            lineHeight: "1.3",
-            color: "#f8fafc",
+            fontSize: "19px",
+            lineHeight: "1.35",
+            color: "#f0fdfa",
             fontFamily: "inherit",
             fontWeight: 400,
             letterSpacing: "0.01em",
             width: "100%",
+            minHeight: "28px",
+            maxHeight: "136px",
+            resize: "none",
+            overflowY: "auto",
             opacity: isBusy ? 0.5 : 1,
           }}
           className="placeholder-[#64748b]"
@@ -227,8 +238,8 @@ export default function UploadBox() {
                 display: "flex",
                 alignItems: "center",
                 gap: "8px",
-                background: "rgba(99, 102, 241, 0.12)",
-                border: "1px solid rgba(139, 92, 246, 0.35)",
+                background: "rgba(13, 148, 136, 0.16)",
+                border: "1px solid rgba(0, 245, 212, 0.45)",
                 borderRadius: "12px",
                 padding: "7px 10px",
                 maxWidth: "100%",
@@ -236,14 +247,14 @@ export default function UploadBox() {
               }}
             >
               {/* File icon */}
-              <FileText size={15} color="#a78bfa" style={{ flexShrink: 0 }} />
+              <FileText size={15} color="#00f5d4" style={{ flexShrink: 0 }} />
 
               {/* Filename + size */}
               <span
                 style={{
                   fontSize: "13px",
                   fontWeight: 600,
-                  color: "#c4b5fd",
+                  color: "#5eead4",
                   flex: 1,
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -283,9 +294,9 @@ export default function UploadBox() {
                 }}
                 onMouseEnter={(e) => {
                   (e.currentTarget as HTMLButtonElement).style.background =
-                    "rgba(99, 102, 241, 0.25)";
+                    "rgba(0, 245, 212, 0.2)";
                   (e.currentTarget as HTMLButtonElement).style.borderColor =
-                    "rgba(139, 92, 246, 0.5)";
+                    "rgba(0, 245, 212, 0.5)";
                 }}
                 onMouseLeave={(e) => {
                   (e.currentTarget as HTMLButtonElement).style.background =
@@ -347,11 +358,11 @@ export default function UploadBox() {
                 alignItems: "center",
                 gap: "8px",
                 fontSize: "13px",
-                color: "#38bdf8",
+                color: "#00f5d4",
                 fontWeight: 500,
               }}
             >
-              <Loader2 size={14} className="animate-spin" color="#38bdf8" />
+              <Loader2 size={14} className="animate-spin" color="#00f5d4" />
               {uploadProgress}
             </motion.div>
           )}
@@ -389,20 +400,21 @@ export default function UploadBox() {
                   width: "32px",
                   height: "32px",
                   borderRadius: "50%",
-                  border: "1.5px solid #8b5cf6",
+                  border: "1.5px solid #00f5d4",
                   flexShrink: 0,
-                  color: "#a78bfa",
-                  background: "rgba(139, 92, 246, 0.12)",
+                  color: "#00f5d4",
+                  background: "rgba(0, 245, 212, 0.12)",
+                  boxShadow: "0 0 12px rgba(0, 245, 212, 0.25)",
                   transition: "all 0.2s ease",
                 }}
               >
-                <Plus size={17} color="#a78bfa" strokeWidth={2.2} />
+                <Plus size={17} color="#00f5d4" strokeWidth={2.2} />
               </span>
               <span
                 style={{
                   fontSize: "14.5px",
                   fontWeight: 600,
-                  color: "#c084fc",
+                  color: "#5eead4",
                   letterSpacing: "0.01em",
                   fontFamily: "inherit",
                 }}
@@ -443,18 +455,18 @@ export default function UploadBox() {
                   width: "28px",
                   height: "28px",
                   borderRadius: "50%",
-                  border: "1.5px solid rgba(99, 102, 241, 0.5)",
+                  border: "1.5px solid rgba(0, 245, 212, 0.5)",
                   flexShrink: 0,
-                  background: "rgba(99, 102, 241, 0.1)",
+                  background: "rgba(0, 245, 212, 0.1)",
                 }}
               >
-                <Plus size={15} color="#818cf8" strokeWidth={2} />
+                <Plus size={15} color="#00f5d4" strokeWidth={2} />
               </span>
               <span
                 style={{
                   fontSize: "13px",
                   fontWeight: 500,
-                  color: "#818cf8",
+                  color: "#5eead4",
                   fontFamily: "inherit",
                 }}
               >
@@ -487,18 +499,19 @@ export default function UploadBox() {
                 height: "66px",
                 borderRadius: "50%",
                 background:
-                  "radial-gradient(circle at 35% 35%, #312e81, #1e1b4b)",
-                border: "1.5px solid rgba(139, 92, 246, 0.4)",
+                  "radial-gradient(circle at 35% 35%, #042f2e, #021a1a)",
+                border: "1.5px solid rgba(0, 245, 212, 0.45)",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
                 flexShrink: 0,
+                boxShadow: "0 0 20px rgba(0, 245, 212, 0.2)",
               }}
             >
-              <Loader2 size={26} color="#38bdf8" className="animate-spin" />
+              <Loader2 size={26} color="#00f5d4" className="animate-spin" />
             </motion.div>
           ) : canSend ? (
-            /* Send button — purple glowing ↑ arrow */
+            /* Send button — luminous deep teal/cyan glowing ↑ arrow */
             <motion.button
               key="send-btn"
               type="button"
@@ -511,7 +524,7 @@ export default function UploadBox() {
               whileHover={{
                 scale: 1.1,
                 boxShadow:
-                  "0 0 32px rgba(99, 102, 241, 0.7), 0 0 12px rgba(139, 92, 246, 0.5)",
+                  "0 0 38px rgba(0, 245, 212, 0.85), 0 0 14px rgba(13, 148, 136, 0.6)",
               }}
               whileTap={{ scale: 0.9 }}
               transition={{ type: "spring", stiffness: 350, damping: 22 }}
@@ -520,10 +533,10 @@ export default function UploadBox() {
                 height: "66px",
                 borderRadius: "50%",
                 background:
-                  "radial-gradient(circle at 35% 35%, #4f46e5, #7c3aed)",
-                border: "1.5px solid rgba(139, 92, 246, 0.7)",
+                  "radial-gradient(circle at 35% 35%, #00f5d4, #0d9488)",
+                border: "1.5px solid rgba(0, 245, 212, 0.85)",
                 boxShadow:
-                  "0 0 22px rgba(99, 102, 241, 0.5), 0 0 8px rgba(139, 92, 246, 0.35)",
+                  "0 0 26px rgba(0, 245, 212, 0.65), 0 0 10px rgba(13, 148, 136, 0.4)",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -531,7 +544,7 @@ export default function UploadBox() {
                 flexShrink: 0,
               }}
             >
-              <Send size={24} color="#ffffff" strokeWidth={1.8} />
+              <Send size={24} color="#020406" strokeWidth={2.4} />
             </motion.button>
           ) : (
             /* Idle mic / upload shortcut button */
@@ -544,7 +557,11 @@ export default function UploadBox() {
               initial={{ opacity: 0, scale: 0.75 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.75 }}
-              whileHover={{ scale: 1.06 }}
+              whileHover={{
+                scale: 1.06,
+                boxShadow: "0 0 24px rgba(0, 245, 212, 0.4)",
+                borderColor: "rgba(0, 245, 212, 0.75)",
+              }}
               whileTap={{ scale: 0.92 }}
               transition={{ type: "spring", stiffness: 350, damping: 22 }}
               style={{
@@ -552,9 +569,9 @@ export default function UploadBox() {
                 height: "66px",
                 borderRadius: "50%",
                 background:
-                  "radial-gradient(circle at 35% 35%, #312e81, #1e1b4b)",
-                border: "1.5px solid rgba(139, 92, 246, 0.55)",
-                boxShadow: "0 0 16px rgba(139, 92, 246, 0.25)",
+                  "radial-gradient(circle at 35% 35%, #042f2e, #021a1a)",
+                border: "1.5px solid rgba(0, 245, 212, 0.5)",
+                boxShadow: "0 0 18px rgba(0, 245, 212, 0.22)",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -567,8 +584,8 @@ export default function UploadBox() {
                 height="26"
                 viewBox="0 0 24 24"
                 fill="none"
-                stroke="#c084fc"
-                strokeWidth="1.8"
+                stroke="#00f5d4"
+                strokeWidth="1.9"
                 strokeLinecap="round"
                 strokeLinejoin="round"
               >
@@ -606,19 +623,19 @@ export default function UploadBox() {
             position: "absolute",
             inset: 0,
             borderRadius: "26px",
-            background: "rgba(15, 23, 42, 0.92)",
+            background: "rgba(2, 7, 10, 0.94)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             pointerEvents: "none",
             zIndex: 10,
             gap: "12px",
-            color: "#38bdf8",
+            color: "#00f5d4",
             fontSize: "17px",
             fontWeight: 600,
           }}
         >
-          <FileUp size={28} className="animate-bounce" color="#38bdf8" />
+          <FileUp size={28} className="animate-bounce" color="#00f5d4" />
           Drop your PDF here
         </div>
       )}

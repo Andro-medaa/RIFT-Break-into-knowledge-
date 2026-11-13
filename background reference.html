@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Cosmic Spotlight • Multi-Celestial Canvas Engine</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+<style>
+    body {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      background-color: #030712;
+      color: #f3f4f6;
+      overflow-x: hidden;
+    }
+    .code-font {
+      font-family: 'JetBrains Mono', monospace;
+    }
+    /* Subtle nebular ambient backdrop layers */
+    .nebula-bg-1 {
+      background: radial-gradient(circle at 20% 25%, rgba(13, 148, 136, 0.12) 0%, rgba(2, 6, 23, 0) 60%);
+    }
+    .nebula-bg-2 {
+      background: radial-gradient(circle at 80% 65%, rgba(168, 85, 247, 0.10) 0%, rgba(2, 6, 23, 0) 65%);
+    }
+    .nebula-bg-3 {
+      background: radial-gradient(circle at 50% 90%, rgba(14, 165, 233, 0.08) 0%, rgba(2, 6, 23, 0) 50%);
+    }
+    /* Smooth range slider styling */
+    input[type=range] {
+      -webkit-appearance: none;
+      background: rgba(20, 184, 166, 0.15);
+      border-radius: 9999px;
+      height: 6px;
+      outline: none;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #2dd4bf;
+      cursor: pointer;
+      box-shadow: 0 0 10px rgba(45, 212, 191, 0.8), 0 0 2px #fff;
+      transition: transform 0.1s ease;
+    }
+    input[type=range]::-webkit-slider-thumb:hover {
+      transform: scale(1.2);
+    }
+  </style>
+</head>
+<body class="min-h-screen relative selection:bg-teal-500/30 selection:text-teal-100">
+<!-- Interactive Star Grid Canvas Background -->
+<canvas class="fixed inset-0 w-full h-full pointer-events-none z-0" id="starGridCanvas"></canvas>
+<!-- Ambient Cosmic Gradient Overlays -->
+<div class="fixed inset-0 nebula-bg-1 pointer-events-none z-0"></div>
+<div class="fixed inset-0 nebula-bg-2 pointer-events-none z-0"></div>
+<div class="fixed inset-0 nebula-bg-3 pointer-events-none z-0"></div>
+<!-- Main Content Container -->
+<div class="relative z-10 flex flex-col min-h-screen">
+<!-- Top Nav -->
+<header class="w-full border-b border-teal-500/20 backdrop-blur-xl bg-slate-950/60 sticky top-0 px-6 sm:px-8 py-3.5 flex items-center justify-between z-20">
+<div class="flex items-center space-x-3">
+<div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-teal-950 via-teal-900 to-emerald-700 border border-teal-400/40 flex items-center justify-center shadow-[0_0_18px_rgba(20,184,166,0.35)]">
+<svg class="w-4 h-4 text-teal-200 fill-current drop-shadow-[0_0_8px_rgba(45,212,191,0.9)]" viewbox="0 0 24 24">
+<path d="M12 1L14.8 8.6L22.5 11.4L14.8 14.2L12 21.8L9.2 14.2L1.5 11.4L9.2 8.6Z"></path>
+<circle cx="18" cy="5" fill="#67e8f9" r="1.8"></circle>
+<circle cx="6" cy="18" fill="#fef08a" r="1.4"></circle>
+</svg>
+</div>
+<div class="flex flex-col">
+<span class="font-semibold tracking-tight text-teal-100 text-sm flex items-center gap-1.5">
+            Cosmic Spotlight
+            <span class="text-[10px] code-font px-1.5 py-0.5 rounded-md bg-teal-500/10 border border-teal-500/30 text-teal-300 font-normal">v2.5 Rich Cosmos</span>
+</span>
+<span class="text-[11px] text-teal-400/70">Multi-Celestial Canvas Engine</span>
+</div>
+</div>
+<nav class="flex items-center space-x-6 text-sm text-teal-200/70 hidden lg:flex font-medium">
+<a class="hover:text-teal-300 transition-colors duration-200 flex items-center gap-1.5 text-teal-300" href="#options">
+<span class="w-1.5 h-1.5 rounded-full bg-teal-400 shadow-[0_0_6px_#2dd4bf]"></span>Interactive Cosmos
+        </a>
+<a class="hover:text-teal-300 transition-colors duration-200" href="#celestial-roster">Celestial Objects</a>
+<a class="hover:text-teal-300 transition-colors duration-200" href="#options">Live Controls</a>
+<a class="hover:text-teal-300 transition-colors duration-200" href="#code-section">Implementation Code</a>
+</nav>
+<div class="flex items-center space-x-3">
+<div class="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-teal-950/70 border border-teal-500/30 text-[11px] code-font text-teal-300 shadow-inner">
+<span class="text-teal-500/80">POS:</span>
+<span class="text-teal-200 font-semibold" id="cursorCoords">X: 0, Y: 0</span>
+<span class="text-teal-700">|</span>
+<span class="text-teal-400">LIT: <span class="text-teal-100 font-bold" id="litCount">0</span></span>
+</div>
+<button class="text-xs px-3.5 py-1.5 rounded-lg border border-teal-500/30 bg-teal-950/70 hover:bg-teal-900/60 hover:border-teal-400/50 transition-all text-teal-200 flex items-center gap-1.5 shadow-sm shadow-teal-950 active:scale-95" id="toggleRadiusBtn">
+<svg class="w-3.5 h-3.5 text-teal-400" fill="none" stroke="currentColor" viewbox="0 0 24 24"><circle cx="12" cy="12" r="9" stroke-dasharray="3 3" stroke-width="2"></circle><circle cx="12" cy="12" fill="currentColor" r="3"></circle></svg>
+          Aura: <span class="text-teal-100 font-semibold" id="radiusLabel">220px</span>
+</button>
+</div>
+</header>
+<!-- Hero Section -->
+<main class="flex-1 max-w-6xl mx-auto px-5 sm:px-8 py-14 flex flex-col items-center justify-center text-center">
+<!-- Cosmic Badge -->
+<div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-teal-950/80 border border-teal-500/30 text-xs text-teal-200 mb-6 backdrop-blur-md shadow-[0_0_20px_rgba(20,184,166,0.15)]">
+<span class="w-2 h-2 rounded-full bg-teal-400 animate-pulse shadow-[0_0_8px_#2dd4bf]"></span>
+<span class="font-medium tracking-wide">Deep Teal Cosmos Preview • Procedural 4-Type Entity Ecosystem</span>
+</div>
+<!-- Cosmic Headline -->
+<h1 class="text-4xl sm:text-6xl font-extrabold tracking-tight text-transparent bg-clip-text bg-gradient-to-b from-teal-50 via-teal-100 to-teal-400 max-w-4xl leading-[1.12]">
+        Cosmic Celestial Grid with Cursor Spotlight
+      </h1>
+<p class="mt-5 text-base sm:text-lg text-teal-100/75 max-w-2xl font-light leading-relaxed">
+        Interactive 60fps canvas ecosystem rendering diamond stars, glowing crescent moons, ringed Saturnian planets, and spiral galaxies across a deep teal cosmos that ignite and reveal vivid detail under your cursor.
+      </p>
+<!-- Celestial Filter Pills (Interactive Type Selector) -->
+<div class="mt-8 flex flex-wrap items-center justify-center gap-2 max-w-2xl">
+<span class="text-xs uppercase tracking-wider text-teal-400/70 font-semibold code-font mr-1">Filter Cosmos:</span>
+<button class="filter-pill active px-3.5 py-1.5 rounded-full text-xs font-medium border border-teal-400/60 bg-teal-500/20 text-teal-100 shadow-[0_0_12px_rgba(45,212,191,0.25)] transition-all cursor-pointer" data-filter="all">
+          All Celestial Bodies
+        </button>
+<button class="filter-pill px-3.5 py-1.5 rounded-full text-xs font-medium border border-teal-500/20 bg-slate-900/60 text-teal-300/80 hover:text-teal-100 hover:border-teal-400/40 hover:bg-teal-950/50 transition-all cursor-pointer" data-filter="star">
+          ✦ Chromatic Stars
+        </button>
+<button class="filter-pill px-3.5 py-1.5 rounded-full text-xs font-medium border border-teal-500/20 bg-slate-900/60 text-teal-300/80 hover:text-teal-100 hover:border-teal-400/40 hover:bg-teal-950/50 transition-all cursor-pointer" data-filter="moon">
+          ☾ Crescent Moons
+        </button>
+<button class="filter-pill px-3.5 py-1.5 rounded-full text-xs font-medium border border-teal-500/20 bg-slate-900/60 text-teal-300/80 hover:text-teal-100 hover:border-teal-400/40 hover:bg-teal-950/50 transition-all cursor-pointer" data-filter="planet">
+          🪐 Ringed Planets
+        </button>
+<button class="filter-pill px-3.5 py-1.5 rounded-full text-xs font-medium border border-teal-500/20 bg-slate-900/60 text-teal-300/80 hover:text-teal-100 hover:border-teal-400/40 hover:bg-teal-950/50 transition-all cursor-pointer" data-filter="galaxy">
+          🌀 Spiral Galaxies
+        </button>
+</div>
+<!-- Quick Celestial Showcase Legend Cards -->
+<div class="mt-8 grid grid-cols-2 sm:grid-cols-4 gap-3.5 w-full max-w-4xl text-left" id="celestial-roster">
+<div class="group relative p-3.5 rounded-xl bg-slate-950/70 border border-teal-500/25 backdrop-blur-md hover:border-teal-400/50 hover:bg-teal-950/30 transition-all duration-300 shadow-[0_0_15px_rgba(4,20,25,0.6)]">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-lg bg-cyan-950/80 border border-cyan-400/30 flex items-center justify-center text-cyan-300 text-lg shadow-[0_0_12px_rgba(6,182,212,0.3)]">
+              ✦
+            </div>
+<div>
+<div class="text-xs font-semibold text-teal-100 flex items-center gap-1.5">
+                Chromatic Stars
+                <span class="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
+</div>
+<div class="text-[11px] text-teal-400/70">4 &amp; 8-point ray flare</div>
+</div>
+</div>
+<p class="mt-2.5 text-[11px] text-teal-200/60 leading-snug">Vibrant cyan, amber &amp; rose diamond stars that flare with chromatic spikes inside cursor aura.</p>
+</div>
+<div class="group relative p-3.5 rounded-xl bg-slate-950/70 border border-teal-500/25 backdrop-blur-md hover:border-teal-400/50 hover:bg-teal-950/30 transition-all duration-300 shadow-[0_0_15px_rgba(4,20,25,0.6)]">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-lg bg-emerald-950/80 border border-emerald-400/30 flex items-center justify-center text-emerald-200 text-lg shadow-[0_0_12px_rgba(52,211,153,0.3)]">
+              ☾
+            </div>
+<div>
+<div class="text-xs font-semibold text-teal-100 flex items-center gap-1.5">
+                Crescent Moons
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+</div>
+<div class="text-[11px] text-teal-400/70">Lunar mint &amp; lavender halo</div>
+</div>
+</div>
+<p class="mt-2.5 text-[11px] text-teal-200/60 leading-snug">Graceful glowing crescents whose inner cradle illuminates with subtle crater detail when hovered.</p>
+</div>
+<div class="group relative p-3.5 rounded-xl bg-slate-950/70 border border-teal-500/25 backdrop-blur-md hover:border-teal-400/50 hover:bg-teal-950/30 transition-all duration-300 shadow-[0_0_15px_rgba(4,20,25,0.6)]">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-lg bg-amber-950/80 border border-amber-400/30 flex items-center justify-center text-amber-300 text-lg shadow-[0_0_12px_rgba(245,158,11,0.3)]">
+              🪐
+            </div>
+<div>
+<div class="text-xs font-semibold text-teal-100 flex items-center gap-1.5">
+                Ringed Planets
+                <span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+</div>
+<div class="text-[11px] text-teal-400/70">Tilted orbital dust bands</div>
+</div>
+</div>
+<p class="mt-2.5 text-[11px] text-teal-200/60 leading-snug">Two-tone celestial spheres with inclined rings that cast orbital particle dust when energized.</p>
+</div>
+<div class="group relative p-3.5 rounded-xl bg-slate-950/70 border border-teal-500/25 backdrop-blur-md hover:border-teal-400/50 hover:bg-teal-950/30 transition-all duration-300 shadow-[0_0_15px_rgba(4,20,25,0.6)]">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-lg bg-purple-950/80 border border-purple-400/30 flex items-center justify-center text-purple-300 text-lg shadow-[0_0_12px_rgba(168,85,247,0.3)]">
+              🌀
+            </div>
+<div>
+<div class="text-xs font-semibold text-teal-100 flex items-center gap-1.5">
+                Spiral Galaxies
+                <span class="w-1.5 h-1.5 rounded-full bg-purple-400"></span>
+</div>
+<div class="text-[11px] text-teal-400/70">Pinwheel nebula vortex</div>
+</div>
+</div>
+<p class="mt-2.5 text-[11px] text-teal-200/60 leading-snug">Spinning twin logarithmic spiral arms emitting ultraviolet and aqua stardust cores.</p>
+</div>
+</div>
+<!-- Interactive Controls Panel Card -->
+<div class="mt-8 w-full max-w-4xl bg-slate-950/80 backdrop-blur-xl border border-teal-500/30 rounded-2xl p-6 sm:p-7 shadow-[0_0_35px_rgba(4,40,43,0.8)] text-left" id="options">
+<div class="flex flex-wrap items-center justify-between pb-4 border-b border-teal-500/20 gap-3">
+<div class="flex items-center space-x-2.5">
+<div class="w-2.5 h-2.5 rounded-full bg-teal-400 shadow-[0_0_8px_#2dd4bf]"></div>
+<span class="text-xs uppercase tracking-wider font-semibold text-teal-200">Cosmic Engine Live Controls</span>
+</div>
+<div class="text-xs code-font text-teal-400/80 flex items-center gap-2">
+<span class="px-2 py-0.5 rounded bg-teal-950/80 border border-teal-500/30 text-teal-300">canvas-2d</span>
+<span>•</span>
+<span>celestial-vector-math</span>
+<span>•</span>
+<span class="text-teal-300 font-bold">60fps</span>
+</div>
+</div>
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-6 mt-6">
+<!-- Spotlight Radius Slider -->
+<div>
+<div class="flex items-center justify-between mb-2">
+<label class="block text-xs font-medium text-teal-100">Spotlight Radius</label>
+<span class="text-xs code-font text-teal-300 font-semibold"><span id="valRadius">220</span>px</span>
+</div>
+<input class="w-full" id="inputRadius" max="360" min="100" step="10" type="range" value="220"/>
+<div class="flex justify-between text-[10px] text-teal-400/60 mt-1 code-font">
+<span>100px</span>
+<span>Focus Field</span>
+<span>360px</span>
+</div>
+</div>
+<!-- Galaxy Spin Velocity Slider -->
+<div>
+<div class="flex items-center justify-between mb-2">
+<label class="block text-xs font-medium text-teal-100">Galaxy Spin Velocity</label>
+<span class="text-xs code-font text-teal-300 font-semibold"><span id="valSpin">1.0</span>x</span>
+</div>
+<input class="w-full" id="inputSpin" max="3" min="0.1" step="0.1" type="range" value="1.0"/>
+<div class="flex justify-between text-[10px] text-teal-400/60 mt-1 code-font">
+<span>0.1x (Slow)</span>
+<span>Orbital Speed</span>
+<span>3.0x (Rapid)</span>
+</div>
+</div>
+<!-- Celestial Density / Grid Spacing Slider -->
+<div>
+<div class="flex items-center justify-between mb-2">
+<label class="block text-xs font-medium text-teal-100">Cosmic Grid Spacing</label>
+<span class="text-xs code-font text-teal-300 font-semibold"><span id="valSpacing">42</span>px</span>
+</div>
+<input class="w-full" id="inputSpacing" max="70" min="30" step="2" type="range" value="42"/>
+<div class="flex justify-between text-[10px] text-teal-400/60 mt-1 code-font">
+<span>Dense (30px)</span>
+<span>Density</span>
+<span>Sparse (70px)</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Implementation Code Drawer / Preview Card -->
+<div class="mt-8 w-full max-w-4xl bg-slate-950/80 backdrop-blur-xl border border-teal-500/30 rounded-2xl overflow-hidden shadow-[0_0_35px_rgba(4,40,43,0.6)] text-left" id="code-section">
+<div class="px-6 py-4 bg-teal-950/40 border-b border-teal-500/20 flex flex-wrap items-center justify-between gap-3">
+<div class="flex items-center gap-2">
+<svg class="w-4 h-4 text-teal-400" fill="none" stroke="currentColor" viewbox="0 0 24 24"><path d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"></path></svg>
+<span class="text-xs font-semibold uppercase tracking-wider text-teal-200">Vanilla JS / Canvas Multi-Celestial Engine</span>
+</div>
+<button class="px-3 py-1 rounded-md text-xs font-medium bg-teal-900/60 hover:bg-teal-800/80 border border-teal-500/30 text-teal-200 transition-colors flex items-center gap-1.5" id="copyCodeBtn">
+<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewbox="0 0 24 24"><rect height="13" rx="2" ry="2" stroke-width="2" width="13" x="9" y="9"></rect><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" stroke-width="2"></path></svg>
+<span id="copyBtnText">Copy Engine Code</span>
+</button>
+</div>
+<div class="p-5 bg-black/60 overflow-x-auto max-h-72">
+<pre class="text-xs code-font text-teal-200/90 leading-relaxed"><code id="codeBlock">// Multi-Celestial Canvas 2D Spotlight Engine
+// 4 Celestial Bodies: Diamond Stars, Crescent Moons, Ringed Planets, Spiral Galaxies
+const canvas = document.getElementById('starGridCanvas');
+const ctx = canvas.getContext('2d');
+
+// Renders celestial objects with quadratic falloff and chromatic bloom
+function renderCelestialField(mouse, radius, filterMode) {
+  celestialGrid.forEach(obj =&gt; {
+    if (filterMode !== 'all' &amp;&amp; obj.type !== filterMode) return;
+    const dist = Math.hypot(obj.x - mouse.x, obj.y - mouse.y);
+    const inLight = dist &lt; radius;
+    const factor = inLight ? Math.cos((dist / radius) * (Math.PI / 2)) : 0;
+    
+    // Draw distinct procedural celestial entity
+    switch(obj.type) {
+      case 'star':   drawChromaticStar(ctx, obj, factor); break;
+      case 'moon':   drawGlowingCrescent(ctx, obj, factor); break;
+      case 'planet': drawRingedPlanet(ctx, obj, factor); break;
+      case 'galaxy': drawSpiralGalaxy(ctx, obj, factor, time); break;
+    }
+  });
+}</code></pre>
+</div>
+</div>
+</main>
+<!-- Footer -->
+<footer class="border-t border-teal-500/10 py-8 px-6 text-center text-xs text-teal-400/50">
+      Interactive reference pattern inspired by modern AI &amp; design tools (Stitch, Linear, Vercel, Raycast). High-DPI Procedural Celestial Canvas.
+    </footer>
+</div>
+<!-- Interactive Multi-Celestial Canvas Logic -->
+<script>
+    (function() {
+      const canvas = document.getElementById('starGridCanvas');
+      const ctx = canvas.getContext('2d');
+
+      let width, height;
+      let mouse = { x: -2000, y: -2000, targetX: -2000, targetY: -2000 };
+
+      // Configurable properties
+      let config = {
+        spacing: 42,
+        spotlightRadius: 220,
+        spinVelocity: 1.0,
+        filter: 'all' // 'all', 'star', 'moon', 'planet', 'galaxy'
+      };
+
+      // Palette of vibrant celestial colors
+      const starColors = [
+        { idle: 'rgba(103, 232, 249, 0.25)', active: '#67e8f9', glow: 'rgba(34, 211, 238, 0.6)' }, // cyan
+        { idle: 'rgba(252, 211, 77, 0.25)',  active: '#fcd34d', glow: 'rgba(245, 158, 11, 0.6)' },  // amber gold
+        { idle: 'rgba(192, 132, 252, 0.25)', active: '#c084fc', glow: 'rgba(168, 85, 247, 0.6)' }, // violet
+        { idle: 'rgba(244, 114, 182, 0.25)', active: '#f472b6', glow: 'rgba(236, 72, 153, 0.6)' }, // rose
+        { idle: 'rgba(52, 211, 153, 0.25)',  active: '#34d399', glow: 'rgba(16, 185, 129, 0.6)' }   // emerald mint
+      ];
+
+      const moonColors = [
+        { idle: 'rgba(167, 243, 208, 0.25)', active: '#6ee7b7', halo: 'rgba(52, 211, 153, 0.5)' }, // mint
+        { idle: 'rgba(254, 240, 138, 0.25)', active: '#fef08a', halo: 'rgba(234, 179, 8, 0.5)' },   // pale gold
+        { idle: 'rgba(233, 213, 255, 0.25)', active: '#e9d5ff', halo: 'rgba(192, 132, 252, 0.5)' }  // lavender
+      ];
+
+      const planetColors = [
+        { core: '#38bdf8', ring: '#2dd4bf', idle: 'rgba(56, 189, 248, 0.25)' },
+        { core: '#fb923c', ring: '#facc15', idle: 'rgba(251, 146, 60, 0.25)' },
+        { core: '#e879f9', ring: '#818cf8', idle: 'rgba(232, 121, 249, 0.25)' }
+      ];
+
+      const galaxyColors = [
+        { arm1: '#38bdf8', arm2: '#818cf8', core: '#c084fc', idle: 'rgba(129, 140, 248, 0.25)' },
+        { arm1: '#2dd4bf', arm2: '#4ade80', core: '#67e8f9', idle: 'rgba(45, 212, 191, 0.25)' },
+        { arm1: '#f472b6', arm2: '#c084fc', core: '#fb7185', idle: 'rgba(244, 114, 182, 0.25)' }
+      ];
+
+      // Procedural Celestial Grid Cache
+      let celestialObjects = [];
+
+      // Pseudo-random deterministic hash based on coordinates
+      function coordHash(x, y) {
+        let h = (x * 374761393 + y * 668265263) ^ 0x5bf03635;
+        h = Math.imul(h ^ (h >>> 13), 1274126177);
+        return ((h ^ (h >>> 16)) >>> 0) / 4294967295;
+      }
+
+      function buildGrid() {
+        celestialObjects = [];
+        const spacing = config.spacing;
+        const cols = Math.ceil(width / spacing);
+        const rows = Math.ceil(height / spacing);
+
+        for (let i = 0; i <= cols; i++) {
+          for (let j = 0; j <= rows; j++) {
+            const gx = i * spacing + (spacing / 2);
+            const gy = j * spacing + (spacing / 2);
+
+            const r1 = coordHash(i, j);
+            const r2 = coordHash(j, i);
+            const r3 = coordHash(i * 3, j * 7);
+
+            // Determine Celestial Type:
+            // 72% Stars, 11% Moons, 9% Ringed Planets, 8% Spiral Galaxies
+            let type = 'star';
+            if (r1 > 0.92) type = 'galaxy';
+            else if (r1 > 0.83) type = 'planet';
+            else if (r1 > 0.72) type = 'moon';
+
+            celestialObjects.push({
+              x: gx,
+              y: gy,
+              type: type,
+              seed: r2,
+              seed2: r3,
+              points: r2 > 0.5 ? 8 : 4,
+              colorIdx: Math.floor(r3 * 100),
+              rotationOffset: r2 * Math.PI * 2,
+              orbitTilt: (r3 - 0.5) * 0.8
+            });
+          }
+        }
+      }
+
+      // 1. Draw Multi-pointed Chromatic Star
+      function drawStar(ctx, obj, factor, time) {
+        const pal = starColors[obj.colorIdx % starColors.length];
+        const cx = obj.x;
+        const cy = obj.y;
+
+        const baseR = 1.8;
+        const activeR = obj.points === 8 ? 6.5 : 5.8;
+        const outerR = baseR + factor * (activeR - baseR);
+        const innerR = outerR * (obj.points === 8 ? 0.35 : 0.24);
+
+        const currentAlpha = 0.22 + factor * 0.78;
+        const points = obj.points;
+
+        ctx.save();
+        ctx.translate(cx, cy);
+
+        // Rotation & twinkle
+        const rot = obj.rotationOffset + (factor > 0.05 ? time * 0.5 : 0);
+        ctx.rotate(rot);
+
+        // Glow bloom when in spotlight
+        if (factor > 0.25) {
+          ctx.shadowBlur = 12 * factor;
+          ctx.shadowColor = pal.glow;
+        }
+
+        ctx.beginPath();
+        for (let i = 0; i < points * 2; i++) {
+          const angle = (i * Math.PI) / points - Math.PI / 2;
+          const r = (i % 2 === 0) ? outerR : innerR;
+          const px = Math.cos(angle) * r;
+          const py = Math.sin(angle) * r;
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+
+        ctx.fillStyle = factor > 0.15 ? pal.active : pal.idle;
+        ctx.globalAlpha = currentAlpha;
+        ctx.fill();
+
+        // Extra center core spark
+        if (factor > 0.4) {
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath();
+          ctx.arc(0, 0, outerR * 0.24, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Subtle cross ray flare
+          ctx.strokeStyle = pal.active;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(-outerR * 1.6, 0); ctx.lineTo(outerR * 1.6, 0);
+          ctx.moveTo(0, -outerR * 1.6); ctx.lineTo(0, outerR * 1.6);
+          ctx.stroke();
+        }
+
+        ctx.restore();
+      }
+
+      // 2. Draw Glowing Crescent Moon
+      function drawMoon(ctx, obj, factor, time) {
+        const pal = moonColors[obj.colorIdx % moonColors.length];
+        const cx = obj.x;
+        const cy = obj.y;
+
+        const baseR = 2.4;
+        const activeR = 6.2;
+        const r = baseR + factor * (activeR - baseR);
+        const currentAlpha = 0.24 + factor * 0.76;
+
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(obj.rotationOffset + (factor > 0.1 ? Math.sin(time + obj.seed) * 0.15 : 0));
+
+        if (factor > 0.25) {
+          ctx.shadowBlur = 14 * factor;
+          ctx.shadowColor = pal.halo;
+        }
+
+        // Crescent moon path using two arcs
+        ctx.beginPath();
+        ctx.arc(0, 0, r, -Math.PI * 0.5, Math.PI * 0.5, false);
+        ctx.quadraticCurveTo(r * 0.25, 0, 0, -Math.PI * 0.5);
+        ctx.closePath();
+
+        ctx.fillStyle = factor > 0.15 ? pal.active : pal.idle;
+        ctx.globalAlpha = currentAlpha;
+        ctx.fill();
+
+        // Micro-crater details & outer halo ring under spotlight
+        if (factor > 0.45) {
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+          ctx.beginPath();
+          ctx.arc(r * 0.4, -r * 0.15, r * 0.16, 0, Math.PI * 2);
+          ctx.arc(r * 0.5, r * 0.2, r * 0.12, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.strokeStyle = pal.halo;
+          ctx.lineWidth = 0.8;
+          ctx.beginPath();
+          ctx.arc(0, 0, r * 1.5, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+
+        ctx.restore();
+      }
+
+      // 3. Draw Ringed Saturnian Planet
+      function drawPlanet(ctx, obj, factor, time) {
+        const pal = planetColors[obj.colorIdx % planetColors.length];
+        const cx = obj.x;
+        const cy = obj.y;
+
+        const baseR = 2.2;
+        const activeR = 5.8;
+        const r = baseR + factor * (activeR - baseR);
+        const currentAlpha = 0.25 + factor * 0.75;
+
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(obj.orbitTilt);
+
+        if (factor > 0.25) {
+          ctx.shadowBlur = 12 * factor;
+          ctx.shadowColor = pal.ring;
+        }
+
+        ctx.globalAlpha = currentAlpha;
+
+        // Back half of the ring
+        ctx.strokeStyle = factor > 0.15 ? pal.ring : pal.idle;
+        ctx.lineWidth = 1.2 + factor * 0.8;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, r * 2.1, r * 0.7, 0, Math.PI, Math.PI * 2);
+        ctx.stroke();
+
+        // Planet body
+        const grad = ctx.createLinearGradient(-r, -r, r, r);
+        grad.addColorStop(0, factor > 0.15 ? '#ffffff' : pal.idle);
+        grad.addColorStop(0.5, factor > 0.15 ? pal.core : pal.idle);
+        grad.addColorStop(1, '#090a0f');
+
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(0, 0, r, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Front half of the ring (casts in front of planet)
+        ctx.strokeStyle = factor > 0.15 ? pal.ring : pal.idle;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, r * 2.1, r * 0.7, 0, 0, Math.PI);
+        ctx.stroke();
+
+        // Orbital dust particles when hovered
+        if (factor > 0.4) {
+          ctx.fillStyle = pal.ring;
+          const dustAngle = time * 2 + obj.seed * 10;
+          const px = Math.cos(dustAngle) * (r * 2.3);
+          const py = Math.sin(dustAngle) * (r * 0.7);
+          ctx.beginPath();
+          ctx.arc(px, py, 1.2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        ctx.restore();
+      }
+
+      // 4. Draw Spiral Galaxy
+      function drawGalaxy(ctx, obj, factor, time) {
+        const pal = galaxyColors[obj.colorIdx % galaxyColors.length];
+        const cx = obj.x;
+        const cy = obj.y;
+
+        const baseR = 2.8;
+        const activeR = 7.5;
+        const maxRadius = baseR + factor * (activeR - baseR);
+        const currentAlpha = 0.25 + factor * 0.75;
+
+        ctx.save();
+        ctx.translate(cx, cy);
+
+        // Spin animation (boosts spin under cursor spotlight)
+        const spinSpeed = config.spinVelocity * (factor > 0.2 ? 1.8 : 0.6);
+        const rot = obj.rotationOffset + time * spinSpeed;
+        ctx.rotate(rot);
+
+        ctx.globalAlpha = currentAlpha;
+
+        if (factor > 0.25) {
+          ctx.shadowBlur = 15 * factor;
+          ctx.shadowColor = pal.arm1;
+        }
+
+        // Draw twin logarithmic spiral arms with particle nodes
+        const armCount = 2;
+        const steps = 14;
+
+        for (let a = 0; a < armCount; a++) {
+          const armAngleOffset = a * Math.PI;
+          ctx.fillStyle = a === 0 ? pal.arm1 : pal.arm2;
+
+          for (let s = 1; s <= steps; s++) {
+            const progress = s / steps;
+            const theta = armAngleOffset + progress * 2.4;
+            const dist = progress * maxRadius;
+            const px = Math.cos(theta) * dist;
+            const py = Math.sin(theta) * dist * 0.65; // tilted perspective
+            const dotSize = (1 - progress * 0.5) * (0.8 + factor * 0.8);
+
+            ctx.beginPath();
+            ctx.arc(px, py, dotSize, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+
+        // Vortex luminous core
+        ctx.fillStyle = factor > 0.2 ? '#ffffff' : pal.core;
+        ctx.beginPath();
+        ctx.arc(0, 0, 1.5 + factor * 1.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+      }
+
+      // Handle Resize with High-DPI Canvas Support
+      function resize() {
+        const dpr = window.devicePixelRatio || 1;
+        width = window.innerWidth;
+        height = window.innerHeight;
+        canvas.width = width * dpr;
+        canvas.height = height * dpr;
+        ctx.setTransform(1, 0, 0, 1, 0, 0); // reset
+        ctx.scale(dpr, dpr);
+        buildGrid();
+      }
+
+      window.addEventListener('resize', resize);
+      resize();
+
+      // Mouse Telemetry Tracking
+      const cursorCoordsEl = document.getElementById('cursorCoords');
+      const litCountEl = document.getElementById('litCount');
+
+      window.addEventListener('mousemove', (e) => {
+        mouse.targetX = e.clientX;
+        mouse.targetY = e.clientY;
+        if (mouse.x === -2000) {
+          mouse.x = e.clientX;
+          mouse.y = e.clientY;
+        }
+        cursorCoordsEl.textContent = `X: ${Math.round(e.clientX)}, Y: ${Math.round(e.clientY)}`;
+      });
+
+      window.addEventListener('mouseleave', () => {
+        mouse.targetX = -2000;
+        mouse.targetY = -2000;
+        cursorCoordsEl.textContent = 'X: -, Y: -';
+      });
+
+      // Main 60fps Render Loop
+      let time = 0;
+      function render() {
+        time += 0.025;
+
+        // Smooth cursor lerp
+        mouse.x += (mouse.targetX - mouse.x) * 0.18;
+        mouse.y += (mouse.targetY - mouse.y) * 0.18;
+
+        ctx.clearRect(0, 0, width, height);
+
+        const radius = config.spotlightRadius;
+        const radiusSq = radius * radius;
+        const filter = config.filter;
+
+        let activeLitCount = 0;
+
+        // Render dynamic spotlight radial glow aura on canvas
+        if (mouse.x > -500 && mouse.y > -500) {
+          const radialGlow = ctx.createRadialGradient(
+            mouse.x, mouse.y, 0,
+            mouse.x, mouse.y, radius
+          );
+          radialGlow.addColorStop(0, 'rgba(45, 212, 191, 0.12)');
+          radialGlow.addColorStop(0.4, 'rgba(168, 85, 247, 0.06)');
+          radialGlow.addColorStop(1, 'rgba(0, 0, 0, 0)');
+          
+          ctx.save();
+          ctx.fillStyle = radialGlow;
+          ctx.beginPath();
+          ctx.arc(mouse.x, mouse.y, radius, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+
+        // Draw Celestial Objects
+        for (let i = 0; i < celestialObjects.length; i++) {
+          const obj = celestialObjects[i];
+
+          // Check category filter
+          if (filter !== 'all' && obj.type !== filter) {
+            continue;
+          }
+
+          const dx = obj.x - mouse.x;
+          const dy = obj.y - mouse.y;
+          const distSq = dx * dx + dy * dy;
+
+          let factor = 0;
+          if (distSq < radiusSq) {
+            const dist = Math.sqrt(distSq);
+            factor = Math.cos((dist / radius) * (Math.PI / 2));
+            activeLitCount++;
+          }
+
+          // Render entity by type
+          switch (obj.type) {
+            case 'star':
+              drawStar(ctx, obj, factor, time);
+              break;
+            case 'moon':
+              drawMoon(ctx, obj, factor, time);
+              break;
+            case 'planet':
+              drawPlanet(ctx, obj, factor, time);
+              break;
+            case 'galaxy':
+              drawGalaxy(ctx, obj, factor, time);
+              break;
+          }
+        }
+
+        litCountEl.textContent = activeLitCount;
+        requestAnimationFrame(render);
+      }
+
+      requestAnimationFrame(render);
+
+      // UI Controls bindings
+      const inputRadius = document.getElementById('inputRadius');
+      const valRadius = document.getElementById('valRadius');
+      const radiusLabel = document.getElementById('radiusLabel');
+
+      const inputSpin = document.getElementById('inputSpin');
+      const valSpin = document.getElementById('valSpin');
+
+      const inputSpacing = document.getElementById('inputSpacing');
+      const valSpacing = document.getElementById('valSpacing');
+
+      inputRadius.addEventListener('input', (e) => {
+        const val = parseFloat(e.target.value);
+        config.spotlightRadius = val;
+        valRadius.textContent = val;
+        radiusLabel.textContent = val + 'px';
+      });
+
+      inputSpin.addEventListener('input', (e) => {
+        const val = parseFloat(e.target.value);
+        config.spinVelocity = val;
+        valSpin.textContent = val.toFixed(1);
+      });
+
+      inputSpacing.addEventListener('input', (e) => {
+        const val = parseInt(e.target.value, 10);
+        config.spacing = val;
+        valSpacing.textContent = val;
+        buildGrid();
+      });
+
+      // Quick Aura Preset Button
+      const toggleRadiusBtn = document.getElementById('toggleRadiusBtn');
+      const presets = [140, 220, 320];
+      let presetIdx = 1;
+      toggleRadiusBtn.addEventListener('click', () => {
+        presetIdx = (presetIdx + 1) % presets.length;
+        const newRadius = presets[presetIdx];
+        config.spotlightRadius = newRadius;
+        inputRadius.value = newRadius;
+        valRadius.textContent = newRadius;
+        radiusLabel.textContent = newRadius + 'px';
+      });
+
+      // Filter Pills Logic
+      const filterPills = document.querySelectorAll('.filter-pill');
+      filterPills.forEach(btn => {
+        btn.addEventListener('click', () => {
+          filterPills.forEach(p => {
+            p.classList.remove('active', 'border-teal-400/60', 'bg-teal-500/20', 'text-teal-100', 'shadow-[0_0_12px_rgba(45,212,191,0.25)]');
+            p.classList.add('border-teal-500/20', 'bg-slate-900/60', 'text-teal-300/80');
+          });
+
+          btn.classList.add('active', 'border-teal-400/60', 'bg-teal-500/20', 'text-teal-100', 'shadow-[0_0_12px_rgba(45,212,191,0.25)]');
+          btn.classList.remove('border-teal-500/20', 'bg-slate-900/60', 'text-teal-300/80');
+
+          config.filter = btn.getAttribute('data-filter');
+        });
+      });
+
+      // Copy Code Drawer Button
+      const copyCodeBtn = document.getElementById('copyCodeBtn');
+      const copyBtnText = document.getElementById('copyBtnText');
+      const codeBlock = document.getElementById('codeBlock');
+
+      copyCodeBtn.addEventListener('click', () => {
+        navigator.clipboard.writeText(codeBlock.innerText).then(() => {
+          copyBtnText.textContent = 'Copied to Clipboard!';
+          copyCodeBtn.classList.add('bg-teal-700', 'text-white');
+          setTimeout(() => {
+            copyBtnText.textContent = 'Copy Engine Code';
+            copyCodeBtn.classList.remove('bg-teal-700', 'text-white');
+          }, 2000);
+        });
+      });
+
+    })();
+  </script>
+</body></html>

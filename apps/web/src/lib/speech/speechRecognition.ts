@@ -74,18 +74,20 @@ export class ClientBargeInController {
         let interim = '';
         let final = '';
 
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
+        // Iterate through ALL results from 0 to preserve all previous sentences
+        for (let i = 0; i < event.results.length; ++i) {
           const res = event.results[i];
+          const chunkText = res[0].transcript.trim();
           if (res.isFinal) {
-            final += res[0].transcript;
+            final += (final ? ' ' : '') + chunkText;
           } else {
-            interim += res[0].transcript;
+            interim += (interim ? ' ' : '') + chunkText;
           }
         }
 
-        const text = (final || interim).trim();
-        if (text) {
-          this.handlers.onTranscript(text, Boolean(final));
+        const fullText = (final + (interim ? (final ? ' ' : '') + interim : '')).trim();
+        if (fullText) {
+          this.handlers.onTranscript(fullText, Boolean(final && !interim));
         }
       };
 

@@ -19,6 +19,7 @@ export const VoiceBargeInBar: React.FC<VoiceBargeInBarProps> = ({
   const [isListening, setIsListening] = useState<boolean>(false);
   const [transcript, setTranscript] = useState<string>('');
   const [textInput, setTextInput] = useState<string>('');
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [recentQuestions, setRecentQuestions] = useState<Array<{ id: string; text: string; time: string }>>([]);
 
   const controllerRef = useRef<ClientBargeInController | null>(null);
@@ -28,6 +29,7 @@ export const VoiceBargeInBar: React.FC<VoiceBargeInBarProps> = ({
     const controller = new ClientBargeInController({
       onSpeechStart: () => {
         setIsListening(true);
+        setErrorMsg(null);
         onBargeIn(); // Instantly silence Web Audio node client-side
       },
       onTranscript: (spokenText) => {
@@ -36,6 +38,14 @@ export const VoiceBargeInBar: React.FC<VoiceBargeInBarProps> = ({
       },
       onError: (err) => {
         console.warn('Speech recognition error:', err);
+        if (err === 'network') {
+          setErrorMsg('Browser speech service network error: Google speech servers unreachable. This commonly happens in Brave browser (due to Brave Shield blocking Google STT), ad blockers, or VPNs.');
+        } else if (err === 'not-allowed') {
+          setErrorMsg('Microphone permission blocked. Please allow microphone access in browser settings.');
+        } else {
+          setErrorMsg(`Speech recognition error: ${err}`);
+        }
+        setIsListening(false);
       },
       onMisfire: () => {
         // Ambient noise or false start -> resume
@@ -248,6 +258,40 @@ export const VoiceBargeInBar: React.FC<VoiceBargeInBarProps> = ({
           </button>
         </form>
       </div>
+
+      {/* Error alert if browser SpeechRecognition hits network or permission error */}
+      {errorMsg && (
+        <div
+          style={{
+            marginTop: '10px',
+            padding: '8px 12px',
+            borderRadius: '6px',
+            background: 'rgba(239, 68, 68, 0.15)',
+            border: '1px solid rgba(239, 68, 68, 0.35)',
+            color: '#fca5a5',
+            fontSize: '11px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '8px',
+          }}
+        >
+          <span>⚠️ {errorMsg}</span>
+          <button
+            type="button"
+            onClick={() => setErrorMsg(null)}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: '#fca5a5',
+              cursor: 'pointer',
+              fontSize: '12px',
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Recent Asked Questions Feed */}
       {recentQuestions.length > 0 && (

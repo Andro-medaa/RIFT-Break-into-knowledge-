@@ -17,6 +17,7 @@ function getHeaders(ownerId?: string): HeadersInit {
 
 export interface Citation {
   id: string;
+  number?: number;
   label: string;
   page?: number;
   paragraphId?: string;
@@ -110,7 +111,9 @@ export async function queryDocument(
   instruction?: string,
   ownerId?: string,
   paragraphs?: Array<{ id: string; text: string; bbox?: any; [key: string]: any }>,
-  fileUrl?: string
+  fileUrl?: string,
+  signal?: AbortSignal,
+  chatHistory?: Array<{ role: string; content: string }>
 ): Promise<QueryResponse> {
   const res = await fetch(`${API_BASE}/api/documents/${documentId}/query`, {
     method: "POST",
@@ -123,7 +126,9 @@ export async function queryDocument(
       instruction: instruction?.trim() || undefined,
       paragraphs: paragraphs && paragraphs.length > 0 ? paragraphs : undefined,
       file_url: fileUrl || undefined,
+      chat_history: chatHistory && chatHistory.length > 0 ? chatHistory : undefined,
     }),
+    signal,
   });
 
   if (!res.ok) {
@@ -255,11 +260,13 @@ export interface ScriptSegmentItem {
   text: string;
   page_number: number;
   bbox?: { x: number; y: number; w: number; h: number };
+  chapter_heading?: string | null;
 }
 
 export interface ScriptResponseData {
   document_id: string;
   segments: ScriptSegmentItem[];
+  instruction?: string | null;
 }
 
 export interface VoiceOption {
@@ -278,7 +285,9 @@ export async function generateScript(
   language: string = "en",
   forceRegenerate: boolean = false,
   paragraphs?: Array<{ id: string; text: string; bbox?: any; [key: string]: any }>,
-  ownerId?: string
+  ownerId?: string,
+  instruction?: string,
+  contentFilter?: string
 ): Promise<ScriptResponseData> {
   const res = await fetch(`${API_BASE}/api/documents/${documentId}/script`, {
     method: "POST",
@@ -291,6 +300,8 @@ export async function generateScript(
       language,
       force_regenerate: forceRegenerate,
       paragraphs: paragraphs && paragraphs.length > 0 ? paragraphs : undefined,
+      instruction: instruction !== undefined ? instruction.trim() : undefined,
+      content_filter: contentFilter || undefined,
     }),
   });
 
@@ -328,6 +339,9 @@ export async function synthesizeElevenLabs(
   }
 
   const json = await res.json();
+  if (json.data?.error) {
+    throw new Error(json.data.error);
+  }
   return json.data;
 }
 
@@ -350,4 +364,220 @@ export async function getElevenLabsVoices(): Promise<VoiceOption[]> {
 
   const json = await res.json();
   return json.data || [];
+}
+
+/* ── Conversation & Multi-Thread API ────────────────────────────────────────── */
+
+export interface ConversationItem {
+  id: string;
+  document_id: string;
+  owner_id: string;
+  title: string;
+  system_prompt?: string | null;
+  summary?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  message_count: number;
+}
+
+export interface ChatMessageItem {
+  id: string;
+  conversation_id: string;
+  document_id: string;
+  owner_id: string;
+  role: "user" | "assistant";
+  content: string;
+  citations?: Citation[];
+  sequence_number: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ConversationDetailResponse {
+  conversation: ConversationItem;
+  messages: ChatMessageItem[];
+}
+
+export async function listConversations(
+  documentId: string,
+  ownerId?: string
+): Promise<ConversationItem[]> {
+  const res = await fetch(`${API_BASE}/api/documents/${documentId}/conversations`, {
+    method: "GET",
+    headers: getHeaders(ownerId),
+  });
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function createConversation(
+  documentId: string,
+  title?: string,
+  systemPrompt?: string,
+  ownerId?: string
+): Promise<ConversationItem> {
+  const res = await fetch(`${API_BASE}/api/documents/${documentId}/conversations`, {
+    method: "POST",
+    headers: {
+      ...getHeaders(ownerId),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      title: title || "New Discussion",
+      system_prompt: systemPrompt || undefined,
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || "Failed to create conversation");
+  }
+  return res.json();
+}
+
+export async function getConversation(
+  conversationId: string,
+  ownerId?: string
+): Promise<ConversationDetailResponse | null> {
+  const res = await fetch(`${API_BASE}/api/conversations/${conversationId}`, {
+    method: "GET",
+    headers: getHeaders(ownerId),
+  });
+  if (!res.ok) return null;
+  return res.json();
+}
+
+export async function updateConversation(
+  conversationId: string,
+  data: { title?: string; system_prompt?: string },
+  ownerId?: string
+): Promise<ConversationItem> {
+  const res = await fetch(`${API_BASE}/api/conversations/${conversationId}`, {
+    method: "PATCH",
+    headers: {
+      ...getHeaders(ownerId),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || "Failed to update conversation");
+  }
+  return res.json();
+}
+
+export async function deleteConversation(
+  conversationId: string,
+  ownerId?: string
+): Promise<boolean> {
+  const res = await fetch(`${API_BASE}/api/conversations/${conversationId}`, {
+    method: "DELETE",
+    headers: getHeaders(ownerId),
+  });
+  return res.ok;
+}
+
+export async function queryConversation(
+  conversationId: string,
+  question: string,
+  paragraphs?: Array<{ id: string; text: string; bbox?: any }>,
+  fileUrl?: string,
+  signal?: AbortSignal,
+  ownerId?: string,
+  instruction?: string
+): Promise<{ user_message: ChatMessageItem; assistant_message: ChatMessageItem }> {
+  const res = await fetch(`${API_BASE}/api/conversations/${conversationId}/query`, {
+    method: "POST",
+    headers: {
+      ...getHeaders(ownerId),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      question,
+      instruction: instruction?.trim() || undefined,
+      paragraphs: paragraphs && paragraphs.length > 0 ? paragraphs : undefined,
+      file_url: fileUrl || undefined,
+    }),
+    signal,
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `Query failed (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function editConversationMessage(
+  conversationId: string,
+  messageId: string,
+  newContent: string,
+  paragraphs?: Array<{ id: string; text: string; bbox?: any }>,
+  fileUrl?: string,
+  ownerId?: string,
+  instruction?: string
+): Promise<{ user_message: ChatMessageItem; assistant_message: ChatMessageItem }> {
+  const res = await fetch(`${API_BASE}/api/conversations/${conversationId}/messages/${messageId}`, {
+    method: "PUT",
+    headers: {
+      ...getHeaders(ownerId),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      new_content: newContent,
+      instruction: instruction?.trim() || undefined,
+      paragraphs: paragraphs && paragraphs.length > 0 ? paragraphs : undefined,
+      file_url: fileUrl || undefined,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `Edit failed (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function retryConversationMessage(
+  conversationId: string,
+  messageId: string,
+  paragraphs?: Array<{ id: string; text: string; bbox?: any }>,
+  fileUrl?: string,
+  ownerId?: string,
+  instruction?: string
+): Promise<ChatMessageItem> {
+  const res = await fetch(`${API_BASE}/api/conversations/${conversationId}/messages/${messageId}/retry`, {
+    method: "POST",
+    headers: {
+      ...getHeaders(ownerId),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      instruction: instruction?.trim() || undefined,
+      paragraphs: paragraphs && paragraphs.length > 0 ? paragraphs : undefined,
+      file_url: fileUrl || undefined,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `Retry failed (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function deleteConversationMessage(
+  conversationId: string,
+  messageId: string,
+  ownerId?: string
+): Promise<{ ok: boolean; status: number; deletedCount?: number }> {
+  const res = await fetch(`${API_BASE}/api/conversations/${conversationId}/messages/${messageId}`, {
+    method: "DELETE",
+    headers: getHeaders(ownerId),
+  });
+  if (!res.ok) {
+    return { ok: false, status: res.status };
+  }
+  const data = await res.json().catch(() => ({}));
+  return { ok: true, status: res.status, deletedCount: data.deleted_count };
 }

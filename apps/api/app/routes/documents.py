@@ -45,6 +45,7 @@ class DocumentResponse(BaseModel):
     file_size: int
     mime_type: str = "application/pdf"
     created_at: Optional[Any] = None
+    instruction: Optional[str] = None
 
 
 class DeleteResponse(BaseModel):
@@ -67,10 +68,12 @@ class QueryRequest(BaseModel):
     instruction: Optional[str] = Field(None, description="Optional focus / system instruction.")
     paragraphs: Optional[list[dict[str, Any]]] = Field(None, description="Client-extracted paragraphs with bboxes fallback.")
     file_url: Optional[str] = Field(None, description="Public or accessible URL to the PDF for server-side PyMuPDF parsing fallback.")
+    chat_history: Optional[list[dict[str, str]]] = Field(None, description="Previous conversation messages in thread.")
 
 
 class CitationResponse(BaseModel):
     id: str
+    number: Optional[int] = None
     label: str
     page: Optional[int] = 1
     paragraphId: Optional[str] = None
@@ -109,14 +112,19 @@ async def upload_document_by_address(
             file_address=payload.file_address,
             owner_id=owner_id,
         )
+        saved_instruction = script_service.save_document_instruction(
+            document_id=doc["id"],
+            owner_id=owner_id,
+            instruction=payload.instruction,
+        )
         # Background task for multimodal chunking and Gemini vector embedding
         background_tasks.add_task(
             ingestion_service.ingest_document,
             document_id=doc["id"],
             owner_id=owner_id,
-            instruction=payload.instruction,
+            instruction=saved_instruction,
         )
-        return DocumentResponse(**doc)
+        return DocumentResponse(**doc, instruction=saved_instruction)
     except StorageError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
@@ -149,14 +157,19 @@ async def upload_document_file(
             filename=file.filename,
             owner_id=owner_id,
         )
+        saved_instruction = script_service.save_document_instruction(
+            document_id=doc["id"],
+            owner_id=owner_id,
+            instruction=instruction,
+        )
         # Background task for multimodal chunking and Gemini vector embedding
         background_tasks.add_task(
             ingestion_service.ingest_document,
             document_id=doc["id"],
             owner_id=owner_id,
-            instruction=instruction,
+            instruction=saved_instruction,
         )
-        return DocumentResponse(**doc)
+        return DocumentResponse(**doc, instruction=saved_instruction)
     except StorageError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
@@ -174,6 +187,12 @@ async def ingest_document_endpoint(
 ) -> IngestionResponse:
     """Explicitly trigger ingestion for a document."""
     try:
+        if instruction is not None:
+            script_service.save_document_instruction(
+                document_id=document_id,
+                owner_id=owner_id,
+                instruction=instruction,
+            )
         result = await ingestion_service.ingest_document(
             document_id=document_id,
             owner_id=owner_id,
@@ -221,6 +240,7 @@ async def query_document_endpoint(
         instruction=payload.instruction,
         client_paragraphs=payload.paragraphs,
         file_url=payload.file_url,
+        chat_history=payload.chat_history,
     )
     return QueryResponse(**result)
 
@@ -229,7 +249,7 @@ async def query_document_endpoint(
     "/{document_id}/script",
     response_model=ScriptResponse,
     summary="Generate spoken script linked to bboxes",
-    description="Uses Gemini Flash to convert document chunks into 1-2 line spoken segments linked to bboxes.",
+    description="Uses Gemini Flash to convert document chunks into instruction-aware spoken segments linked to bboxes.",
 )
 async def generate_script_endpoint(
     document_id: str,
@@ -245,6 +265,8 @@ async def generate_script_endpoint(
         language=req.language or "en",
         force_regenerate=req.force_regenerate or False,
         fallback_chunks=req.paragraphs,
+        instruction=req.instruction,
+        content_filter=req.content_filter,
     )
 
 
@@ -258,6 +280,7 @@ async def get_script_endpoint(
     document_id: str,
     voice_style: str = "natural",
     language: str = "en",
+    instruction: Optional[str] = None,
     owner_id: str = Depends(get_required_owner_id),
 ) -> ScriptResponse:
     """Get spoken script segments for the document."""
@@ -266,6 +289,7 @@ async def get_script_endpoint(
         owner_id=owner_id,
         voice_style=voice_style,
         language=language,
+        instruction=instruction,
     )
 
 
@@ -280,7 +304,13 @@ async def list_documents(
 ) -> list[DocumentResponse]:
     """List documents scoped to the caller's owner_id."""
     docs = await storage_service.list_documents(owner_id=owner_id)
-    return [DocumentResponse(**d) for d in docs]
+    return [
+        DocumentResponse(
+            **d,
+            instruction=script_service.get_document_instruction(d["id"], owner_id),
+        )
+        for d in docs
+    ]
 
 
 @router.get(
@@ -300,7 +330,10 @@ async def get_document(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Document '{document_id}' not found.",
         )
-    return DocumentResponse(**doc)
+    return DocumentResponse(
+        **doc,
+        instruction=script_service.get_document_instruction(doc["id"], owner_id),
+    )
 
 
 @router.delete(

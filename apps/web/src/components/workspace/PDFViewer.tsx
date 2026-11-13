@@ -16,9 +16,11 @@
 "use client";
 
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -36,10 +38,21 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Scan,
+  Play,
+  RotateCw,
+  RotateCcw,
+  Sparkles,
+  X,
 } from "lucide-react";
 import { useWorkspace } from "@/lib/workspace";
 import type { TranscriptParagraph } from "@/lib/workspace";
 import type { ScriptSegmentItem } from "@/lib/api";
+import {
+  buildFirstBBoxByPage,
+  computeBBoxScrollTop,
+  isValidBBox,
+  type PageFirstBBoxTarget,
+} from "@/lib/pdfMiniMap";
 
 // Configure PDF.js worker via CDN
 pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`;
@@ -47,7 +60,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjs.vers
 /* ════════════════════════════════════════════════════════════════════════════
    CornerBrackets – 4 L-shaped reticles on active bbox
 ════════════════════════════════════════════════════════════════════════════ */
-function CornerBrackets({ size = 10, t = 2, color = "rgba(34,211,238,0.9)" }: {
+function CornerBrackets({ size = 10, t = 2, color = "rgba(192, 132, 252, 0.95)" }: {
   size?: number; t?: number; color?: string;
 }) {
   const s: React.CSSProperties = {
@@ -100,6 +113,244 @@ function CornerBrackets({ size = 10, t = 2, color = "rgba(34,211,238,0.9)" }: {
    Renders bounding boxes for paragraphs belonging to a specific page.
    Coordinates are normalised [0-1] → multiplied by 100 for CSS %.
 ════════════════════════════════════════════════════════════════════════════ */
+function bboxPositionStyle(bbox: { x: number; y: number; w: number; h: number }): React.CSSProperties {
+  const left = Math.max(0, Math.min(1, bbox.x));
+  const top = Math.max(0, Math.min(1, bbox.y));
+  const width = Math.max(0, Math.min(1 - left, bbox.w));
+  const height = Math.max(0, Math.min(1 - top, bbox.h));
+  return {
+    left: `${(left * 100).toFixed(3)}%`,
+    top: `${(top * 100).toFixed(3)}%`,
+    width: `${(width * 100).toFixed(3)}%`,
+    height: `${(height * 100).toFixed(3)}%`,
+  };
+}
+
+const BBoxItem = memo(function BBoxItem({
+  p,
+  pageNumber,
+  isActive,
+  isHovered,
+  onSelect,
+  onPlayFromParagraph,
+  onRepeatParagraph,
+  onAskAboutParagraph,
+  onMouseEnter,
+  onMouseLeave,
+}: {
+  p: TranscriptParagraph;
+  pageNumber: number;
+  isActive: boolean;
+  isHovered: boolean;
+  onSelect: (id: string, bbox?: { page: number; x: number; y: number; w: number; h: number }) => void;
+  onPlayFromParagraph: (id: string, bbox?: { page: number; x: number; y: number; w: number; h: number }) => void;
+  onRepeatParagraph: (id: string, bbox?: { page: number; x: number; y: number; w: number; h: number }) => void;
+  onAskAboutParagraph: (p: { id: string; text: string; bbox?: { page: number; x: number; y: number; w: number; h: number } }) => void;
+  onMouseEnter: (id: string) => void;
+  onMouseLeave: () => void;
+}) {
+  const isNearRight = (p.bbox!.x + p.bbox!.w) > 0.88;
+
+  return (
+    <div
+      onClick={(e) => {
+        e.stopPropagation();
+        onSelect(p.id, p.bbox);
+      }}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        onPlayFromParagraph(p.id, p.bbox);
+      }}
+      onMouseEnter={() => onMouseEnter(p.id)}
+      onMouseLeave={onMouseLeave}
+      style={{
+        position: "absolute",
+        boxSizing: "border-box",
+        ...bboxPositionStyle(p.bbox!),
+        border: isActive
+          ? "2px solid #c084fc"
+          : isHovered
+          ? "1.5px dashed rgba(192, 132, 252, 0.85)"
+          : "1px solid rgba(168, 85, 247, 0.18)",
+        background: isActive
+          ? "rgba(168, 85, 247, 0.22)"
+          : isHovered
+          ? "rgba(168, 85, 247, 0.08)"
+          : "transparent",
+        borderRadius: "5px",
+        cursor: "pointer",
+        pointerEvents: "all",
+        transition: "border-color 0.14s ease, background-color 0.14s ease, box-shadow 0.14s ease",
+        boxShadow: isActive
+          ? "0 0 24px rgba(192, 132, 252, 0.7), 0 0 8px rgba(217, 70, 239, 0.5)"
+          : "none",
+        overflow: "visible",
+        zIndex: isActive || isHovered ? 45 : 12,
+      }}
+    >
+      {/* Corner reticles on active */}
+      {isActive && <CornerBrackets color="rgba(192, 132, 252, 0.95)" />}
+
+      {/* Scanline sweep on active */}
+      {isActive && (
+        <div
+          className="scanline-sweep"
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: "linear-gradient(90deg, transparent, rgba(192, 132, 252, 0.35), transparent)",
+            pointerEvents: "none",
+            overflow: "hidden",
+          }}
+        />
+      )}
+
+      {/* Sleek Vertical Micro-Dock Outside BBox (Appears ONLY on hover - never obscures text inside/above/below) */}
+      {isHovered && (
+        <div
+          onMouseEnter={() => onMouseEnter(p.id)}
+          onMouseLeave={onMouseLeave}
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "absolute",
+            top: 0,
+            left: isNearRight ? "auto" : "100%",
+            right: isNearRight ? "100%" : "auto",
+            paddingLeft: isNearRight ? 0 : "6px",
+            paddingRight: isNearRight ? "6px" : 0,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: isNearRight ? "flex-end" : "flex-start",
+            zIndex: 60,
+            pointerEvents: "auto",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: "3px",
+              padding: "4px 3px",
+              borderRadius: "6px",
+              background: "rgba(2, 6, 12, 0.96)",
+              border: "1px solid rgba(0, 245, 212, 0.45)",
+              boxShadow: "0 4px 18px rgba(0, 0, 0, 0.95), 0 0 10px rgba(0, 245, 212, 0.2)",
+              userSelect: "none",
+            }}
+          >
+            {/* Continue / Play */}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onPlayFromParagraph(p.id, p.bbox);
+              }}
+              style={{
+                width: "20px",
+                height: "20px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                borderRadius: "4px",
+                background: "rgba(0, 245, 212, 0.15)",
+                border: "1px solid rgba(0, 245, 212, 0.35)",
+                color: "#00f5d4",
+                cursor: "pointer",
+                padding: 0,
+                transition: "background-color 0.12s ease, color 0.12s ease",
+              }}
+              title="Continue reading from here"
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "#00f5d4";
+                e.currentTarget.style.color = "#02060a";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "rgba(0, 245, 212, 0.15)";
+                e.currentTarget.style.color = "#00f5d4";
+              }}
+            >
+              <Play size={9} fill="currentColor" />
+            </button>
+
+            {/* Repeat Single */}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRepeatParagraph(p.id, p.bbox);
+              }}
+              style={{
+                width: "20px",
+                height: "20px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                borderRadius: "4px",
+                background: "rgba(168, 85, 247, 0.18)",
+                border: "1px solid rgba(192, 132, 252, 0.45)",
+                color: "#d8b4fe",
+                cursor: "pointer",
+                padding: 0,
+                transition: "background-color 0.12s ease, color 0.12s ease",
+              }}
+              title="Repeat only this section (saves spot to resume)"
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "#c084fc";
+                e.currentTarget.style.color = "#02060a";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "rgba(168, 85, 247, 0.18)";
+                e.currentTarget.style.color = "#d8b4fe";
+              }}
+            >
+              <RotateCw size={9} />
+            </button>
+
+            {/* Ask RIFT with Reference */}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onAskAboutParagraph({
+                  id: p.id,
+                  text: p.text,
+                  bbox: p.bbox ? { ...p.bbox, page: p.bbox.page || pageNumber } : { page: pageNumber, x: 0, y: 0, w: 0, h: 0 },
+                });
+              }}
+              style={{
+                width: "20px",
+                height: "20px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                borderRadius: "4px",
+                background: "rgba(0, 245, 212, 0.08)",
+                border: "1px solid rgba(0, 245, 212, 0.25)",
+                color: "#00f5d4",
+                cursor: "pointer",
+                padding: 0,
+                transition: "background-color 0.12s ease, border-color 0.12s ease",
+              }}
+              title="Ask RIFT about this section (sets reference in chat)"
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "rgba(0, 245, 212, 0.35)";
+                e.currentTarget.style.borderColor = "rgba(0, 245, 212, 0.8)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "rgba(0, 245, 212, 0.08)";
+                e.currentTarget.style.borderColor = "rgba(0, 245, 212, 0.25)";
+              }}
+            >
+              <Sparkles size={9} color="#00f5d4" />
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+});
+
 function BBoxOverlay({
   pageNumber,
   paragraphs,
@@ -117,18 +368,36 @@ function BBoxOverlay({
   onSelect: (id: string, bbox?: { page: number; x: number; y: number; w: number; h: number }) => void;
   spotlight: boolean;
 }) {
+  const { playFromParagraph, repeatParagraph, askAboutParagraph } = useWorkspace();
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const hoverTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  const withBox = paragraphs.filter(
-    (p) =>
-      p.bbox &&
-      p.bbox.w > 0.001 &&
-      p.bbox.h > 0.001 &&
-      p.bbox.x >= 0 &&
-      p.bbox.y >= 0 &&
-      p.bbox.x + p.bbox.w <= 1.01 &&
-      p.bbox.y + p.bbox.h <= 1.01
-  );
+  const handleBboxMouseEnter = useCallback((id: string) => {
+    if (hoverTimerRef.current) {
+      clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+    setHoveredId(id);
+  }, []);
+
+  const handleBboxMouseLeave = useCallback(() => {
+    if (hoverTimerRef.current) {
+      clearTimeout(hoverTimerRef.current);
+    }
+    hoverTimerRef.current = setTimeout(() => {
+      setHoveredId(null);
+    }, 280);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (hoverTimerRef.current) {
+        clearTimeout(hoverTimerRef.current);
+      }
+    };
+  }, []);
+
+  const withBox = paragraphs.filter((p) => isValidBBox(p.bbox));
 
   const isParaActive = (p: TranscriptParagraph) => {
     if (!activeParagraphId) {
@@ -217,19 +486,16 @@ function BBoxOverlay({
           style={{
             position: "absolute",
             boxSizing: "border-box",
-            left: `calc(${(activeBBox.x * 100).toFixed(3)}% - 6px)`,
-            top: `calc(${(activeBBox.y * 100).toFixed(3)}% - 4px)`,
-            width: `calc(${(activeBBox.w * 100).toFixed(3)}% + 12px)`,
-            height: `calc(${(activeBBox.h * 100).toFixed(3)}% + 8px)`,
-            border: "2px solid rgba(34,211,238,0.95)",
-            background: "rgba(6,182,212,0.18)",
+            ...bboxPositionStyle(activeBBox),
+            border: "2px solid #c084fc",
+            background: "rgba(168, 85, 247, 0.22)",
             borderRadius: "5px",
-            boxShadow: "0 0 20px rgba(6,182,212,0.5)",
+            boxShadow: "0 0 24px rgba(192, 132, 252, 0.7), 0 0 8px rgba(217, 70, 239, 0.5)",
             zIndex: 30,
             pointerEvents: "none",
           }}
         >
-          <CornerBrackets />
+          <CornerBrackets color="rgba(192, 132, 252, 0.95)" />
           <div
             style={{
               position: "absolute",
@@ -240,82 +506,36 @@ function BBoxOverlay({
               gap: "4px",
               padding: "2px 8px",
               borderRadius: "5px",
-              background: "rgba(10,15,29,0.95)",
-              border: "1px solid rgba(34,211,238,0.55)",
+              background: "rgba(12, 6, 22, 0.95)",
+              border: "1px solid rgba(192, 132, 252, 0.7)",
               fontSize: "9.5px",
-              color: "#67e8f9",
+              color: "#e9d5ff",
               fontFamily: "var(--font-mono)",
               whiteSpace: "nowrap",
               zIndex: 35,
-              boxShadow: "0 2px 10px rgba(6,182,212,0.3)",
+              boxShadow: "0 2px 12px rgba(168, 85, 247, 0.4)",
             }}
           >
-            <span style={{ color: "#34d399" }}>●</span> Source Citation
+            <span style={{ color: "#d946ef" }}>●</span> Source Citation
           </div>
         </div>
       )}
 
-      {withBox.map((p, idx) => {
-        const isActive = isParaActive(p);
-        const isHovered = p.id === hoveredId;
-
-        return (
-          <div
-            key={p.id}
-            onClick={(e) => {
-              e.stopPropagation();
-              onSelect(p.id, p.bbox);
-            }}
-            onMouseEnter={() => setHoveredId(p.id)}
-            onMouseLeave={() => setHoveredId(null)}
-            style={{
-              position: "absolute",
-              boxSizing: "border-box",
-              /* Breathing room padding so bbox border never touches or covers text */
-              left: `calc(${(p.bbox!.x * 100).toFixed(3)}% - 6px)`,
-              top: `calc(${(p.bbox!.y * 100).toFixed(3)}% - 4px)`,
-              width: `calc(${(p.bbox!.w * 100).toFixed(3)}% + 12px)`,
-              height: `calc(${(p.bbox!.h * 100).toFixed(3)}% + 8px)`,
-              border: isActive
-                ? "2px solid rgba(34,211,238,0.9)"
-                : isHovered
-                ? "1.5px dashed rgba(34,211,238,0.85)"
-                : "1px solid rgba(56,189,248,0.12)",
-              background: isActive
-                ? "rgba(6,182,212,0.15)"
-                : isHovered
-                ? "rgba(6,182,212,0.06)"
-                : "transparent",
-              borderRadius: "5px",
-              cursor: "pointer",
-              pointerEvents: "all",
-              transition: "all 0.18s ease",
-              boxShadow: isActive
-                ? "0 0 20px rgba(6,182,212,0.45)"
-                : "none",
-              overflow: "visible",
-              zIndex: isActive ? 25 : isHovered ? 15 : 12,
-            }}
-          >
-            {/* Corner reticles on active */}
-            {isActive && <CornerBrackets />}
-
-            {/* Scanline sweep on active */}
-            {isActive && (
-              <div
-                className="scanline-sweep"
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  background: "linear-gradient(90deg, transparent, rgba(34,211,238,0.18), transparent)",
-                  pointerEvents: "none",
-                  overflow: "hidden",
-                }}
-              />
-            )}
-          </div>
-        );
-      })}
+      {withBox.map((p) => (
+        <BBoxItem
+          key={p.id}
+          p={p}
+          pageNumber={pageNumber}
+          isActive={isParaActive(p)}
+          isHovered={p.id === hoveredId}
+          onSelect={onSelect}
+          onPlayFromParagraph={playFromParagraph}
+          onRepeatParagraph={repeatParagraph}
+          onAskAboutParagraph={askAboutParagraph}
+          onMouseEnter={handleBboxMouseEnter}
+          onMouseLeave={handleBboxMouseLeave}
+        />
+      ))}
     </div>
   );
 }
@@ -326,99 +546,26 @@ function BBoxOverlay({
 function MiniMap({
   numPages,
   currentPage,
-  paragraphs,
-  activeParagraphId,
   pdfUrl,
+  firstBboxByPage,
   onPageClick,
 }: {
   numPages: number;
   currentPage: number;
-  paragraphs: TranscriptParagraph[];
-  activeParagraphId: string | null;
   pdfUrl: string | null;
+  firstBboxByPage: Map<number, PageFirstBBoxTarget>;
   onPageClick: (n: number) => void;
 }) {
-  return (
-    <div
-      style={{
-        width: "92px",
-        flexShrink: 0,
-        height: "100%",
-        overflowY: "auto",
-        background: "rgba(8,12,22,0.95)",
-        borderLeft: "1px solid rgba(255,255,255,0.08)",
-        display: "flex",
-        flexDirection: "column",
-        gap: "8px",
-        padding: "10px 8px",
-      }}
-    >
-      {pdfUrl ? (
-        <Document file={pdfUrl} loading={null} error={null}>
-          {Array.from({ length: numPages }, (_, i) => i + 1).map((pageNum) => {
-            const isCurrentPage = currentPage === pageNum;
-            return (
-              <button
-                type="button"
-                key={pageNum}
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  onPageClick(pageNum);
-                }}
-                style={{
-                  width: "76px",
-                  borderRadius: "5px",
-                  background: isCurrentPage ? "rgba(34,211,238,0.14)" : "rgba(255,255,255,0.03)",
-                  border: isCurrentPage
-                    ? "2px solid #38bdf8"
-                    : "1px solid rgba(255,255,255,0.1)",
-                  cursor: "pointer",
-                  position: "relative",
-                  overflow: "hidden",
-                  flexShrink: 0,
-                  boxShadow: isCurrentPage ? "0 0 14px rgba(56,189,248,0.45)" : "none",
-                  transition: "all 0.15s ease",
-                  padding: 0,
-                  display: "block",
-                  textAlign: "left",
-                }}
-                title={`Go to page ${pageNum}`}
-              >
-                <div style={{ pointerEvents: "none" }}>
-                  <Page
-                    pageNumber={pageNum}
-                    width={74}
-                    renderTextLayer={false}
-                    renderAnnotationLayer={false}
-                  />
-                </div>
-                {/* Blue Page number badge */}
-                <div
-                  style={{
-                    position: "absolute",
-                    bottom: "3px",
-                    right: "4px",
-                    fontSize: "8.5px",
-                    fontWeight: 700,
-                    color: "#38bdf8",
-                    background: "rgba(10,15,29,0.9)",
-                    padding: "1px 5px",
-                    borderRadius: "3px",
-                    border: "1px solid rgba(56,189,248,0.4)",
-                    fontFamily: "var(--font-mono)",
-                    textShadow: "0 1px 2px rgba(0,0,0,0.9)",
-                    pointerEvents: "none",
-                  }}
-                >
-                  p.{pageNum}
-                </div>
-              </button>
-            );
-          })}
-        </Document>
-      ) : (
-        Array.from({ length: numPages }, (_, i) => i + 1).map((pageNum) => (
+  const renderPageButtons = (withPdfPage: boolean) => (
+    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+      {Array.from({ length: numPages }, (_, i) => i + 1).map((pageNum) => {
+        const isCurrentPage = currentPage === pageNum;
+        const firstTarget = firstBboxByPage.get(pageNum);
+        const title = firstTarget
+          ? `Go to page ${pageNum} (1st bbox)`
+          : `Go to page ${pageNum}`;
+
+        return (
           <button
             type="button"
             key={pageNum}
@@ -429,27 +576,144 @@ function MiniMap({
             }}
             style={{
               width: "76px",
-              height: "100px",
-              borderRadius: "5px",
-              background: currentPage === pageNum ? "rgba(34,211,238,0.14)" : "rgba(255,255,255,0.04)",
-              border: currentPage === pageNum
-                ? "2px solid #38bdf8"
-                : "1px solid rgba(255,255,255,0.1)",
+              minHeight: "98px",
+              borderRadius: "6px",
+              background: isCurrentPage
+                ? "rgba(0, 245, 212, 0.14)"
+                : "rgba(255, 255, 255, 0.03)",
+              border: isCurrentPage
+                ? "2px solid #00f5d4"
+                : "1px solid rgba(0, 245, 212, 0.15)",
               cursor: "pointer",
+              position: "relative",
+              overflow: "hidden",
               flexShrink: 0,
+              boxShadow: isCurrentPage
+                ? "0 0 16px rgba(0, 245, 212, 0.45)"
+                : "none",
+              transition: "all 0.15s ease",
+              padding: 0,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              fontSize: "11px",
-              fontWeight: 600,
-              color: "#38bdf8",
-              fontFamily: "var(--font-mono)",
-              padding: 0,
+              textAlign: "left",
             }}
+            title={title}
+            data-first-bbox-id={firstTarget?.id}
           >
-            p.{pageNum}
+            {withPdfPage ? (
+              <div style={{ pointerEvents: "none", width: "100%" }}>
+                <Page
+                  pageNumber={pageNum}
+                  width={74}
+                  renderTextLayer={false}
+                  renderAnnotationLayer={false}
+                  loading={
+                    <div
+                      style={{
+                        width: "74px",
+                        height: "98px",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        fontSize: "10px",
+                        fontFamily: "var(--font-mono)",
+                        color: "rgba(94, 234, 212, 0.65)",
+                      }}
+                    >
+                      p.{pageNum}
+                    </div>
+                  }
+                  error={null}
+                />
+              </div>
+            ) : (
+              <span
+                style={{
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  color: isCurrentPage ? "#00f5d4" : "#5eead4",
+                  fontFamily: "var(--font-mono)",
+                  pointerEvents: "none",
+                }}
+              >
+                p.{pageNum}
+              </span>
+            )}
+
+            {/* Highlighted 1st-bbox marker linked to this mini-map page */}
+            {firstTarget && (
+              <div
+                style={{
+                  position: "absolute",
+                  left: `${Math.max(0, Math.min(96, firstTarget.bbox.x * 100))}%`,
+                  top: `${Math.max(0, Math.min(96, firstTarget.bbox.y * 100))}%`,
+                  width: `${Math.max(6, Math.min(100, firstTarget.bbox.w * 100))}%`,
+                  height: `${Math.max(4, Math.min(100, firstTarget.bbox.h * 100))}%`,
+                  border: "1px solid rgba(0, 245, 212, 0.85)",
+                  background: isCurrentPage
+                    ? "rgba(0, 245, 212, 0.28)"
+                    : "rgba(0, 245, 212, 0.16)",
+                  borderRadius: "2px",
+                  pointerEvents: "none",
+                  zIndex: 2,
+                }}
+              />
+            )}
+
+            {/* Teal Page number badge */}
+            <div
+              style={{
+                position: "absolute",
+                bottom: "3px",
+                right: "4px",
+                fontSize: "8.5px",
+                fontWeight: 700,
+                color: isCurrentPage ? "#00f5d4" : "#5eead4",
+                background: "rgba(1, 4, 7, 0.92)",
+                padding: "1px 5px",
+                borderRadius: "3px",
+                border: isCurrentPage
+                  ? "1px solid rgba(0, 245, 212, 0.55)"
+                  : "1px solid rgba(0, 245, 212, 0.2)",
+                fontFamily: "var(--font-mono)",
+                textShadow: "0 1px 2px rgba(0,0,0,0.9)",
+                pointerEvents: "none",
+                zIndex: 3,
+              }}
+            >
+              p.{pageNum}
+            </div>
           </button>
-        ))
+        );
+      })}
+    </div>
+  );
+
+  return (
+    <div
+      style={{
+        width: "92px",
+        flexShrink: 0,
+        height: "100%",
+        overflowY: "auto",
+        background: "rgba(1, 4, 7, 0.96)",
+        borderLeft: "1px solid rgba(0, 245, 212, 0.12)",
+        display: "flex",
+        flexDirection: "column",
+        padding: "10px 8px",
+      }}
+    >
+      {pdfUrl ? (
+        <Document
+          file={pdfUrl}
+          loading={renderPageButtons(false)}
+          error={renderPageButtons(false)}
+        >
+          {renderPageButtons(true)}
+        </Document>
+      ) : (
+        renderPageButtons(false)
       )}
     </div>
   );
@@ -471,11 +735,14 @@ function CtrlBtn({
   disabled?: boolean;
   children: React.ReactNode;
 }) {
+  const [hovered, setHovered] = useState(false);
   return (
     <button
       onClick={onClick}
       title={title}
       disabled={disabled}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       style={{
         display: "flex",
         alignItems: "center",
@@ -484,15 +751,28 @@ function CtrlBtn({
         height: "32px",
         borderRadius: "8px",
         border: active
-          ? "1px solid rgba(34,211,238,0.5)"
-          : "1px solid rgba(255, 255, 255, 0.08)",
+          ? "1.5px solid #00f5d4"
+          : hovered && !disabled
+          ? "1px solid rgba(0, 245, 212, 0.55)"
+          : "1px solid rgba(0, 245, 212, 0.16)",
         background: active
-          ? "rgba(6,182,212,0.22)"
-          : "rgba(255, 255, 255, 0.05)",
-        color: active ? "#38bdf8" : "#cbd5e1",
+          ? "linear-gradient(135deg, rgba(0, 245, 212, 0.28), rgba(13, 148, 136, 0.4))"
+          : hovered && !disabled
+          ? "rgba(0, 245, 212, 0.12)"
+          : "rgba(2, 6, 10, 0.65)",
+        color: active
+          ? "#00f5d4"
+          : hovered && !disabled
+          ? "#5eead4"
+          : "#cbd5e1",
+        boxShadow: active
+          ? "0 0 14px rgba(0, 245, 212, 0.45)"
+          : hovered && !disabled
+          ? "0 0 10px rgba(0, 245, 212, 0.25)"
+          : "none",
         cursor: disabled ? "not-allowed" : "pointer",
         opacity: disabled ? 0.35 : 1,
-        transition: "all 0.15s ease",
+        transition: "background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease",
         flexShrink: 0,
       }}
     >
@@ -520,10 +800,15 @@ export default function PDFViewer() {
     setZoom,
     togglePanMode,
     navigateToParagraph,
+    navigateToBBox,
+    savedResumeAnchor,
+    resumePreviousPlayback,
+    clearResumeAnchor,
   } = useWorkspace();
 
-  const outerRef     = useRef<HTMLDivElement>(null);
+  const outerRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const lastAutoScrollAnchorRef = useRef<string | null>(null);
   const [containerW, setContainerW] = useState(0);
 
   // Mini-map + spotlight state
@@ -562,6 +847,8 @@ export default function PDFViewer() {
           top: Math.max(0, container.scrollTop + currentTopRelative - 16),
           behavior: "smooth",
         });
+      } else if (pageEl) {
+        pageEl.scrollIntoView({ behavior: "smooth", block: "start" });
       }
     },
     [numPages, setCurrentPage]
@@ -599,6 +886,52 @@ export default function PDFViewer() {
     return () => window.removeEventListener("keydown", handler);
   }, [numPages, currentPage, zoom, scrollToPage, setZoom]);
 
+  /* ── Smooth scroll to a specific bbox on a target page ── */
+  const scrollToBBox = useCallback(
+    (targetPage: number, bbox: { x: number; y: number }) => {
+      const pageEl = document.getElementById(`pdf-page-${targetPage}`);
+      const container = containerRef.current;
+      if (pageEl && container) {
+        const cRect = container.getBoundingClientRect();
+        const pRect = pageEl.getBoundingClientRect();
+        const targetScrollTop = computeBBoxScrollTop(
+          cRect,
+          pRect,
+          container.scrollTop,
+          bbox.y
+        );
+        container.scrollTo({
+          top: targetScrollTop,
+          behavior: "smooth",
+        });
+      } else if (pageEl) {
+        pageEl.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    },
+    []
+  );
+
+  /* ── Map each page to its 1st bounding box for mini-map navigation ── */
+  const firstBboxByPage = useMemo(
+    () => buildFirstBBoxByPage(paragraphs, scriptSegments),
+    [paragraphs, scriptSegments]
+  );
+
+  const handleMiniMapPageClick = useCallback(
+    (targetPage: number) => {
+      const pageClamped = Math.max(1, Math.min(numPages || 1, targetPage));
+      const firstTarget = firstBboxByPage.get(pageClamped);
+      if (firstTarget) {
+        lastAutoScrollAnchorRef.current = `${pageClamped}:${firstTarget.bbox.x.toFixed(4)}:${firstTarget.bbox.y.toFixed(4)}:${firstTarget.id}`;
+        navigateToBBox(pageClamped, firstTarget.bbox, firstTarget.id);
+        scrollToBBox(pageClamped, firstTarget.bbox);
+      } else {
+        scrollToPage(pageClamped);
+      }
+    },
+    [firstBboxByPage, navigateToBBox, numPages, scrollToBBox, scrollToPage]
+  );
+
   /* ── Robust smooth auto-scroll to active paragraph or bbox ── */
   useEffect(() => {
     let targetPage: number | undefined;
@@ -627,31 +960,26 @@ export default function PDFViewer() {
       }
     }
 
-    if (!targetPage || !targetBBox) return;
-
-    if (targetPage !== currentPage) {
-      setCurrentPage(targetPage);
+    if (!targetPage || !targetBBox) {
+      if (!activeBBox && !activeParagraphId) {
+        lastAutoScrollAnchorRef.current = null;
+      }
+      return;
     }
 
+    const anchorKey = `${targetPage}:${targetBBox.x.toFixed(4)}:${targetBBox.y.toFixed(4)}:${activeParagraphId ?? ""}`;
+    if (lastAutoScrollAnchorRef.current === anchorKey) return;
+    lastAutoScrollAnchorRef.current = anchorKey;
+
+    const resolvedPage = targetPage;
+    const resolvedBBox = targetBBox;
     const timer = setTimeout(() => {
-      const pageEl = document.getElementById(`pdf-page-${targetPage}`);
-      const container = containerRef.current;
-      if (pageEl && container) {
-        const cRect = container.getBoundingClientRect();
-        const pRect = pageEl.getBoundingClientRect();
-        const bboxYPixels = targetBBox!.y * pRect.height;
-        const currentBBoxTopRelative = pRect.top + bboxYPixels - cRect.top;
-        const targetScrollTop =
-          container.scrollTop + currentBBoxTopRelative - cRect.height / 3;
-        container.scrollTo({
-          top: Math.max(0, targetScrollTop),
-          behavior: "smooth",
-        });
-      }
+      setCurrentPage(resolvedPage);
+      scrollToBBox(resolvedPage, resolvedBBox);
     }, 60);
 
     return () => clearTimeout(timer);
-  }, [activeParagraphId, activeBBox, paragraphs, scriptSegments, currentPage, setCurrentPage]);
+  }, [activeParagraphId, activeBBox, paragraphs, scriptSegments, setCurrentPage, scrollToBBox]);
 
   /* ── Pan mode ── */
   const [isDragging, setIsDragging] = useState(false);
@@ -689,6 +1017,36 @@ export default function PDFViewer() {
 
   const fitToWidth = useCallback(() => setZoom(1.0), [setZoom]);
 
+  const paragraphsByPage = useMemo(() => {
+    const map = new Map<number, TranscriptParagraph[]>();
+    for (const p of paragraphs) {
+      const pg = p.bbox?.page;
+      if (!pg) continue;
+      let list = map.get(pg);
+      if (!list) {
+        list = [];
+        map.set(pg, list);
+      }
+      list.push(p);
+    }
+    return map;
+  }, [paragraphs]);
+
+  const segmentsByPage = useMemo(() => {
+    const map = new Map<number, ScriptSegmentItem[]>();
+    for (const s of scriptSegments) {
+      const pg = s.page_number;
+      if (!pg) continue;
+      let list = map.get(pg);
+      if (!list) {
+        list = [];
+        map.set(pg, list);
+      }
+      list.push(s);
+    }
+    return map;
+  }, [scriptSegments]);
+
   return (
     <div
       ref={outerRef}
@@ -698,13 +1056,14 @@ export default function PDFViewer() {
         height: "100%",
         display: "flex",
         flexDirection: "column",
-        background: "rgba(15, 23, 42, 0.76)",
-        backdropFilter: "blur(20px)",
-        WebkitBackdropFilter: "blur(20px)",
+        background: "rgba(2, 6, 10, 0.94)",
+        backdropFilter: "none",
+        WebkitBackdropFilter: "none",
         borderRadius: "20px",
         overflow: "hidden",
-        border: "1px solid rgba(255, 255, 255, 0.08)",
-        boxShadow: "0 12px 40px rgba(0, 0, 0, 0.45)",
+        border: "1px solid rgba(0, 245, 212, 0.14)",
+        boxShadow: "0 16px 45px rgba(0, 0, 0, 0.75)",
+        contain: "layout paint",
       }}
     >
       {/* ── Glass Toolbar ── */}
@@ -714,8 +1073,8 @@ export default function PDFViewer() {
           alignItems: "center",
           gap: "6px",
           padding: "7px 12px",
-          background: "rgba(10, 14, 24, 0.82)",
-          borderBottom: "1px solid rgba(255, 255, 255, 0.07)",
+          background: "rgba(1, 4, 7, 0.96)",
+          borderBottom: "1px solid rgba(0, 245, 212, 0.12)",
           flexShrink: 0,
           flexWrap: "wrap",
         }}
@@ -733,13 +1092,13 @@ export default function PDFViewer() {
           style={{
             fontSize: "11.5px",
             fontFamily: "var(--font-mono)",
-            color: "var(--text-primary)",
+            color: "#5eead4",
             minWidth: "60px",
             textAlign: "center",
-            background: "rgba(255, 255, 255, 0.05)",
-            padding: "3px 7px",
+            background: "rgba(0, 245, 212, 0.08)",
+            padding: "3px 8px",
             borderRadius: "6px",
-            border: "1px solid rgba(255, 255, 255, 0.06)",
+            border: "1px solid rgba(0, 245, 212, 0.2)",
           }}
         >
           {numPages ? `${currentPage} / ${numPages}` : "—"}
@@ -753,7 +1112,7 @@ export default function PDFViewer() {
           <ChevronRight size={15} />
         </CtrlBtn>
 
-        <div style={{ width: "1px", height: "18px", background: "rgba(255,255,255,0.1)", margin: "0 2px" }} />
+        <div style={{ width: "1px", height: "18px", background: "rgba(0, 245, 212, 0.15)", margin: "0 2px" }} />
 
         {/* Zoom */}
         <CtrlBtn title="Zoom out (-)" onClick={() => setZoom(Math.max(0.3, zoom - 0.1))}>
@@ -764,9 +1123,13 @@ export default function PDFViewer() {
           style={{
             fontSize: "11px",
             fontFamily: "var(--font-mono)",
-            color: "#38bdf8",
-            minWidth: "40px",
+            color: "#00f5d4",
+            minWidth: "44px",
             textAlign: "center",
+            background: "rgba(0, 245, 212, 0.08)",
+            padding: "3px 7px",
+            borderRadius: "6px",
+            border: "1px solid rgba(0, 245, 212, 0.2)",
           }}
         >
           {Math.round(zoom * 100)}%
@@ -780,7 +1143,7 @@ export default function PDFViewer() {
           <Maximize2 size={14} />
         </CtrlBtn>
 
-        <div style={{ width: "1px", height: "18px", background: "rgba(255,255,255,0.1)", margin: "0 2px" }} />
+        <div style={{ width: "1px", height: "18px", background: "rgba(0, 245, 212, 0.15)", margin: "0 2px" }} />
 
         {/* Pan / Select mode */}
         <CtrlBtn title="Select text mode" onClick={() => panMode && togglePanMode()} active={!panMode}>
@@ -790,7 +1153,7 @@ export default function PDFViewer() {
           <Hand size={14} />
         </CtrlBtn>
 
-        <div style={{ width: "1px", height: "18px", background: "rgba(255,255,255,0.1)", margin: "0 2px" }} />
+        <div style={{ width: "1px", height: "18px", background: "rgba(0, 245, 212, 0.15)", margin: "0 2px" }} />
 
         {/* Spotlight */}
         <CtrlBtn title="Spotlight mode (S)" onClick={() => setSpotlight((v) => !v)} active={spotlight}>
@@ -825,7 +1188,7 @@ export default function PDFViewer() {
             flexDirection: "column",
             alignItems: "center",
             gap: "12px",
-            background: "radial-gradient(circle at 50% 20%, rgba(15,21,37,0.95), #06080d)",
+            background: "radial-gradient(circle at 50% 15%, rgba(4, 18, 24, 0.85), #020406 80%)",
           }}
         >
           {!pdfUrl ? (
@@ -862,8 +1225,8 @@ export default function PDFViewer() {
                   pageNum={pageNum}
                   pageWidth={pageWidth}
                   currentPage={currentPage}
-                  paragraphs={paragraphs.filter((p) => p.bbox?.page === pageNum)}
-                  scriptSegments={scriptSegments.filter((s) => s.page_number === pageNum)}
+                  paragraphs={paragraphsByPage.get(pageNum) ?? EMPTY_PARAS}
+                  scriptSegments={segmentsByPage.get(pageNum) ?? EMPTY_SEGS}
                   activeParagraphId={activeParagraphId}
                   activeBBox={activeBBox}
                   activeBboxPage={activeBboxPage}
@@ -881,11 +1244,89 @@ export default function PDFViewer() {
           <MiniMap
             numPages={numPages}
             currentPage={currentPage}
-            paragraphs={paragraphs}
-            activeParagraphId={activeParagraphId}
             pdfUrl={pdfUrl}
-            onPageClick={scrollToPage}
+            firstBboxByPage={firstBboxByPage}
+            onPageClick={handleMiniMapPageClick}
           />
+        )}
+
+        {/* Floating Bookmark Resume Banner (shown when a single bbox repeat was triggered) */}
+        {savedResumeAnchor && (
+          <div
+            style={{
+              position: "absolute",
+              bottom: "18px",
+              left: "50%",
+              transform: "translateX(-50%)",
+              zIndex: 60,
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              padding: "6px 14px",
+              borderRadius: "20px",
+              background: "rgba(2, 8, 14, 0.96)",
+              border: "1px solid rgba(0, 245, 212, 0.55)",
+              boxShadow: "0 8px 32px rgba(0, 0, 0, 0.95), 0 0 16px rgba(0, 245, 212, 0.3)",
+              backdropFilter: "blur(16px)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+              <div
+                style={{
+                  width: "6px",
+                  height: "6px",
+                  borderRadius: "50%",
+                  background: "#00f5d4",
+                  boxShadow: "0 0 6px #00f5d4",
+                }}
+              />
+              <span
+                style={{
+                  fontSize: "11px",
+                  color: "#ccfbf1",
+                  fontFamily: "var(--font-mono)",
+                }}
+              >
+                Previous spot: Page {savedResumeAnchor.page}
+              </span>
+            </div>
+            <button
+              onClick={resumePreviousPlayback}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "4px",
+                padding: "3px 10px",
+                borderRadius: "10px",
+                background: "linear-gradient(135deg, #00f5d4, #0d9488)",
+                color: "#02060a",
+                fontWeight: 700,
+                fontSize: "11px",
+                border: "none",
+                cursor: "pointer",
+                transition: "all 0.15s ease",
+              }}
+              title="Resume reading from your previous place"
+            >
+              <RotateCcw size={11} />
+              <span>Resume</span>
+            </button>
+            <button
+              onClick={clearResumeAnchor}
+              style={{
+                border: "none",
+                background: "transparent",
+                color: "#64748b",
+                cursor: "pointer",
+                padding: "2px",
+                display: "flex",
+                alignItems: "center",
+              }}
+              title="Dismiss bookmark"
+            >
+              <X size={12} />
+            </button>
+          </div>
         )}
       </div>
     </div>
@@ -895,7 +1336,10 @@ export default function PDFViewer() {
 /* ════════════════════════════════════════════════════════════════════════════
    PageWrapper
 ════════════════════════════════════════════════════════════════════════════ */
-function PageWrapper({
+const EMPTY_PARAS: TranscriptParagraph[] = [];
+const EMPTY_SEGS: ScriptSegmentItem[] = [];
+
+const PageWrapper = memo(function PageWrapper({
   pageNum,
   pageWidth,
   currentPage,
@@ -950,7 +1394,7 @@ function PageWrapper({
         overflow: "hidden",
         outline:
           currentPage === pageNum
-            ? "2px solid rgba(34,211,238,0.5)"
+            ? "2px solid rgba(0, 245, 212, 0.55)"
             : "none",
         marginBottom: "4px",
         flexShrink: 0,
@@ -1006,4 +1450,4 @@ function PageWrapper({
       </div>
     </div>
   );
-}
+});

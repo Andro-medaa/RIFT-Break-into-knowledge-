@@ -12,6 +12,7 @@ class ScriptSegment(BaseModel):
     text: str
     page_number: int
     bbox: Optional[dict[str, Any]] = None
+    chapter_heading: Optional[str] = None
 
 
 class ScriptRequest(BaseModel):
@@ -20,10 +21,13 @@ class ScriptRequest(BaseModel):
     language: Optional[str] = "en"
     force_regenerate: Optional[bool] = False
     paragraphs: Optional[list[dict[str, Any]]] = None
+    instruction: Optional[str] = None
+    content_filter: Optional[str] = None  # "all" | "images_only" | "tables_only"
 
 
 class ScriptResponse(BaseModel):
     """List of script segments linked to PDF bounding boxes."""
     document_id: str
     segments: list[ScriptSegment]
+    instruction: Optional[str] = None
 

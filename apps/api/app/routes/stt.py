@@ -56,11 +56,20 @@ async def transcribe_audio(file: UploadFile = File(...)):
             "If no speech is detected, output nothing."
         )
 
-        for model_name in ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"]:
+        for model_name in [
+            "gemini-3.5-flash-lite",
+            "gemini-3-flash-preview",
+            "gemini-flash-lite-latest",
+            "gemini-3.5-flash",
+        ]:
             try:
                 resp = await client.aio.models.generate_content(
                     model=model_name,
                     contents=[prompt, audio_part],
+                    config=types.GenerateContentConfig(
+                        temperature=0.0,
+                        max_output_tokens=150,
+                    ),
                 )
                 transcribed = (resp.text or "").strip()
                 # Remove surrounding quotes if Gemini wraps the transcription
@@ -68,15 +77,6 @@ async def transcribe_audio(file: UploadFile = File(...)):
                     transcribed.startswith("'") and transcribed.endswith("'")
                 ):
                     transcribed = transcribed[1:-1].strip()
-
-                # Filter out standard hallucinations on quiet/ambient clips
-                hallucinations = {
-                    "thank you", "thank you.", "thanks", "thanks.", "you", "you.",
-                    "bye", "bye.", "okay", "okay.", "so", "so.", "subtitles by", "watching",
-                    "yeah", "yeah.", "hello", "hello."
-                }
-                if transcribed.lower().strip() in hallucinations and len(audio_bytes) < 15000:
-                    transcribed = ""
 
                 logger.info(f"Gemini STT ({model_name}) transcribed {len(audio_bytes)} bytes -> {transcribed!r}")
                 return ApiResponse(

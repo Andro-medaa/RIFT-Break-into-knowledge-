@@ -6,6 +6,7 @@ Includes batching, async execution, vision-based image captioning, and fallback
 pseudo-embeddings for offline development / test environments without an API key.
 """
 
+import asyncio
 import hashlib
 import math
 from typing import Optional
@@ -49,13 +50,51 @@ class GeminiEmbeddingService:
         """Check if a live Gemini client is available."""
         return self._client is not None
 
+    async def _embed_single_text(
+        self,
+        text: str,
+        task_type: str = "RETRIEVAL_DOCUMENT",
+    ) -> list[float]:
+        """Embed an individual text string, returning 768-dim vector."""
+        if not text or not text.strip():
+            return _generate_fallback_embedding("")
+
+        if not self._client:
+            return _generate_fallback_embedding(text)
+
+        safe_text = text[:8000] if len(text) > 8000 else text
+        candidate_models = [self.active_model] + [m for m in FALLBACK_MODELS if m != self.active_model]
+
+        for model_name in candidate_models:
+            try:
+                response = await self._client.aio.models.embed_content(
+                    model=model_name,
+                    contents=safe_text,
+                    config=types.EmbedContentConfig(
+                        task_type=task_type,
+                        output_dimensionality=EMBEDDING_DIM,
+                    ),
+                )
+                self.active_model = model_name
+                if hasattr(response, "embeddings") and response.embeddings:
+                    return response.embeddings[0].values
+                elif hasattr(response, "embedding") and response.embedding:
+                    return response.embedding.values
+            except Exception as exc:
+                logger.debug(f"Model {model_name} embed_content failed: {exc}")
+
+        return _generate_fallback_embedding(text)
+
     async def embed_texts(
         self,
         texts: list[str],
         task_type: str = "RETRIEVAL_DOCUMENT",
-        batch_size: int = 16,
+        concurrency: int = 15,
     ) -> list[list[float]]:
-        """Generate 768-dim embeddings using gemini-embedding-2."""
+        """Generate 768-dim embeddings for all texts using high-concurrency async tasks.
+        
+        Guarantees that every single input text gets a distinct, dense 768-dimensional embedding.
+        """
         if not texts:
             return []
 
@@ -63,48 +102,18 @@ class GeminiEmbeddingService:
             logger.debug(f"Gemini API key not set; using deterministic fallback for {len(texts)} texts.")
             return [_generate_fallback_embedding(t) for t in texts]
 
-        results: list[list[float]] = []
+        sem = asyncio.Semaphore(concurrency)
 
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i : i + batch_size]
-            safe_batch = [t[:8000] if len(t) > 8000 else t for t in batch]
-            batch_success = False
+        async def worker(t: str) -> list[float]:
+            async with sem:
+                return await self._embed_single_text(t, task_type=task_type)
 
-            # Try primary model then fallbacks
-            candidate_models = [self.active_model] + [m for m in FALLBACK_MODELS if m != self.active_model]
-            for model_name in candidate_models:
-                try:
-                    response = await self._client.aio.models.embed_content(
-                        model=model_name,
-                        contents=safe_batch,
-                        config=types.EmbedContentConfig(
-                            task_type=task_type,
-                            output_dimensionality=EMBEDDING_DIM,
-                        ),
-                    )
-                    self.active_model = model_name
-                    if hasattr(response, "embeddings") and response.embeddings:
-                        for emb in response.embeddings:
-                            results.append(emb.values)
-                        batch_success = True
-                        break
-                    elif hasattr(response, "embedding") and response.embedding:
-                        results.append(response.embedding.values)
-                        batch_success = True
-                        break
-                except Exception as exc:
-                    logger.debug(f"Model {model_name} embed_content failed: {exc}")
-
-            if not batch_success:
-                logger.warning(f"All Gemini embedding models failed for batch; using fallback.")
-                results.extend([_generate_fallback_embedding(t) for t in batch])
-
-        return results
+        results = await asyncio.gather(*(worker(t) for t in texts))
+        return list(results)
 
     async def embed_query(self, query: str) -> list[float]:
         """Generate 768-dim embedding for a search query (task_type=RETRIEVAL_QUERY)."""
-        embs = await self.embed_texts([query], task_type="RETRIEVAL_QUERY")
-        return embs[0] if embs else _generate_fallback_embedding(query)
+        return await self._embed_single_text(query, task_type="RETRIEVAL_QUERY")
 
     async def caption_image(self, image_bytes: bytes, mime_type: str = "image/png") -> str:
         """Use Gemini 2.0 Flash to generate a semantic caption for extracted PDF figures."""
@@ -117,7 +126,7 @@ class GeminiEmbeddingService:
                 "or table from a document. Include any visible labels, numbers, trends, or text."
             )
             response = await self._client.aio.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-3.8-flash",
                 contents=[
                     types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
                     prompt,

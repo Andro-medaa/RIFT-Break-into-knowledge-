@@ -199,11 +199,22 @@ class ElevenLabsProvider:
 
             if resp.status_code != 200:
                 logger.error(f"ElevenLabs TTS error {resp.status_code}: {resp.text}")
+                error_msg = f"ElevenLabs error {resp.status_code}"
+                try:
+                    err_json = resp.json()
+                    detail = err_json.get("detail", {})
+                    if isinstance(detail, dict):
+                        if detail.get("code") == "quota_exceeded":
+                            error_msg = "ElevenLabs quota exceeded: credits exhausted"
+                        elif detail.get("message"):
+                            error_msg = detail["message"]
+                except Exception:
+                    pass
                 return {
                     "audio_base64": "",
                     "words": [],
                     "cached": False,
-                    "error": f"ElevenLabs error {resp.status_code}",
+                    "error": error_msg,
                 }
 
             result = resp.json()

@@ -8,7 +8,7 @@ from sqlalchemy import delete, insert, select
 from app.core.db import get_db, scope_by_owner
 from app.core.logger import get_logger
 from app.ingest.chunker import DocumentChunkData, semantic_chunker
-from app.ingest.parser import multimodal_parser
+from app.ingest.parser import extract_page_text_blocks_with_bboxes, multimodal_parser
 from app.model.document_chunks import document_chunks
 from app.model.documents import documents
 from app.services.embedding import embedding_service
@@ -70,10 +70,6 @@ class IngestionService:
         # 5. Semantic Chunking
         chunks = semantic_chunker.chunk_elements(elements)
         logger.info(f"Generated {len(chunks)} semantic chunks for document {document_id}")
-
-        # If instruction is provided, prepend it to the document summary or first chunk context
-        if instruction and chunks:
-            chunks[0].content = f"[User Reading Instruction: {instruction.strip()}]\n\n" + chunks[0].content
 
         # 6. Generate Vector Embeddings (Gemini text-embedding-004)
         texts_to_embed = [c.content for c in chunks]
@@ -180,31 +176,19 @@ class IngestionService:
             for page_idx in range(len(pdf_doc)):
                 page = pdf_doc[page_idx]
                 page_num = page_idx + 1
-                pw = page.rect.width or 1.0
-                ph = page.rect.height or 1.0
-                for b_idx, b in enumerate(page.get_text("blocks")):
-                    if len(b) >= 5 and b[4] and b[4].strip():
-                        txt = b[4].strip()
-                        if len(txt) < 8 and not any(ch.isalpha() for ch in txt):
-                            continue
-                        x0, y0, x1, y1 = float(b[0]), float(b[1]), float(b[2]), float(b[3])
-                        fallback_chunks.append({
-                            "id": f"chunk-{page_num}-{chunk_idx}",
-                            "chunk_index": chunk_idx,
-                            "chunk_type": "text",
-                            "content": txt,
-                            "page_number": page_num,
-                            "bbox": {
-                                "x": round(max(0.0, x0 / pw), 4),
-                                "y": round(max(0.0, y0 / ph), 4),
-                                "w": round(min(1.0, (x1 - x0) / pw), 4),
-                                "h": round(min(1.0, (y1 - y0) / ph), 4),
-                            },
-                            "section_path": [f"Page {page_num}"],
-                            "image_url": None,
-                            "table_markdown": None,
-                        })
-                        chunk_idx += 1
+                for _, txt, bbox in extract_page_text_blocks_with_bboxes(page):
+                    fallback_chunks.append({
+                        "id": f"chunk-{page_num}-{chunk_idx}",
+                        "chunk_index": chunk_idx,
+                        "chunk_type": "text",
+                        "content": txt,
+                        "page_number": page_num,
+                        "bbox": bbox,
+                        "section_path": [f"Page {page_num}"],
+                        "image_url": None,
+                        "table_markdown": None,
+                    })
+                    chunk_idx += 1
             logger.info(f"Generated {len(fallback_chunks)} fallback chunks from PDF for doc={document_id}")
             return fallback_chunks
         except Exception as fb_err:

@@ -45,22 +45,196 @@ def _normalize_rect(
     page_x0: float = 0.0,
     page_y0: float = 0.0,
     pad_pt: float = 2.0,
+    min_dim: float = 0.008,
 ) -> dict[str, float]:
-    """Convert absolute PyMuPDF points rect (x0, y0, x1, y1) into normalized [0.0, 1.0] bbox with breathing margin."""
+    """Convert absolute PyMuPDF points rect (x0, y0, x1, y1) into normalized [0.0, 1.0] bbox."""
     if page_w <= 0 or page_h <= 0:
         return {"x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0}
     x0 = max(0.0, min(1.0, (rect.x0 - pad_pt - page_x0) / page_w))
     y0 = max(0.0, min(1.0, (rect.y0 - pad_pt - page_y0) / page_h))
     x1 = max(0.0, min(1.0, (rect.x1 + pad_pt - page_x0) / page_w))
     y1 = max(0.0, min(1.0, (rect.y1 + pad_pt - page_y0) / page_h))
-    w = max(0.008, x1 - x0)
-    h = max(0.008, y1 - y0)
+    w = min(1.0 - x0, max(min_dim, x1 - x0))
+    h = min(1.0 - y0, max(min_dim, y1 - y0))
     return {
         "x": round(x0, 4),
         "y": round(y0, 4),
         "w": round(w, 4),
         "h": round(h, 4),
     }
+
+
+def _cap_horizontal_padding(
+    ax0: float,
+    ay0: float,
+    ax1: float,
+    ay1: float,
+    pad_l: float,
+    pad_r: float,
+    nx0: float,
+    ny0: float,
+    nx1: float,
+    ny1: float,
+    *,
+    factor: float,
+    max_pad_y: float,
+    min_gap: float,
+    touch_tol: float,
+) -> tuple[float, float]:
+    """Shrink left/right padding when a neighbor overlaps this box's vertical band."""
+    if (ny0 - max_pad_y) < (ay1 + max_pad_y) and (ay0 - max_pad_y) < (ny1 + max_pad_y):
+        if nx0 >= ax1 - touch_tol and nx1 > ax1:
+            pad_r = min(pad_r, max(0.0, (nx0 - ax1 - min_gap) * factor))
+        if nx1 <= ax0 + touch_tol and nx0 < ax0:
+            pad_l = min(pad_l, max(0.0, (ax0 - nx1 - min_gap) * factor))
+    return pad_l, pad_r
+
+
+def _cap_vertical_padding(
+    ax0: float,
+    ay0: float,
+    ax1: float,
+    ay1: float,
+    pad_l: float,
+    pad_r: float,
+    pad_t: float,
+    pad_b: float,
+    nx0: float,
+    ny0: float,
+    nx1: float,
+    ny1: float,
+    *,
+    factor: float,
+    min_gap: float,
+    touch_tol: float,
+    peer_pad_l: float = 0.0,
+    peer_pad_r: float = 0.0,
+) -> tuple[float, float]:
+    """Shrink top/bottom padding when horizontally padded ranges overlap a neighbor."""
+    if (nx0 - peer_pad_l) < (ax1 + pad_r) and (ax0 - pad_l) < (nx1 + peer_pad_r):
+        if ny0 >= ay1 - touch_tol and ny1 > ay1:
+            pad_b = min(pad_b, max(0.0, (ny0 - ay1 - min_gap) * factor))
+        if ny1 <= ay0 + touch_tol and ny0 < ay0:
+            pad_t = min(pad_t, max(0.0, (ay0 - ny1 - min_gap) * factor))
+    return pad_t, pad_b
+
+
+def normalize_context_aware_rects(
+    text_rects: list[pymupdf.Rect],
+    page_w: float,
+    page_h: float,
+    page_x0: float = 0.0,
+    page_y0: float = 0.0,
+    obstacle_rects: Optional[list[pymupdf.Rect]] = None,
+) -> list[dict[str, float]]:
+    """Expand text rects symmetrically within available whitespace without covering neighbor text."""
+    if not text_rects:
+        return []
+    if page_w <= 0 or page_h <= 0:
+        return [{"x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0} for _ in text_rects]
+
+    max_pad_x = max(2.0, 0.0082 * page_w)
+    max_pad_y = max(1.5, 0.0055 * page_w)
+    min_gap = max(0.8, 0.0024 * page_w)
+    touch_tol = max(1.0, 0.003 * page_w)
+    page_x1 = page_x0 + page_w
+    page_y1 = page_y0 + page_h
+    obstacles = obstacle_rects or []
+
+    # Initialise outward margin caps clamped to the page boundaries.
+    pads_l = [min(max_pad_x, max(0.0, r.x0 - page_x0)) for r in text_rects]
+    pads_r = [min(max_pad_x, max(0.0, page_x1 - r.x1)) for r in text_rects]
+    pads_t = [min(max_pad_y, max(0.0, r.y0 - page_y0)) for r in text_rects]
+    pads_b = [min(max_pad_y, max(0.0, page_y1 - r.y1)) for r in text_rects]
+
+    # Pass 1: resolve horizontal padding first so adjacent columns do not falsely cap vertical pad.
+    for i, a in enumerate(text_rects):
+        pl, pr = pads_l[i], pads_r[i]
+        for j, b in enumerate(text_rects):
+            if i == j:
+                continue
+            pl, pr = _cap_horizontal_padding(
+                a.x0, a.y0, a.x1, a.y1, pl, pr, b.x0, b.y0, b.x1, b.y1,
+                factor=0.5, max_pad_y=max_pad_y, min_gap=min_gap, touch_tol=touch_tol,
+            )
+        for obs in obstacles:
+            pl, pr = _cap_horizontal_padding(
+                a.x0, a.y0, a.x1, a.y1, pl, pr, obs.x0, obs.y0, obs.x1, obs.y1,
+                factor=1.0, max_pad_y=max_pad_y, min_gap=min_gap, touch_tol=touch_tol,
+            )
+        pads_l[i], pads_r[i] = pl, pr
+
+    # Pass 2: resolve vertical padding using actual padded horizontal intervals.
+    for i, a in enumerate(text_rects):
+        pl, pr, pt, pb = pads_l[i], pads_r[i], pads_t[i], pads_b[i]
+        for j, b in enumerate(text_rects):
+            if i == j:
+                continue
+            pt, pb = _cap_vertical_padding(
+                a.x0, a.y0, a.x1, a.y1, pl, pr, pt, pb, b.x0, b.y0, b.x1, b.y1,
+                factor=0.5, min_gap=min_gap, touch_tol=touch_tol,
+                peer_pad_l=pads_l[j], peer_pad_r=pads_r[j],
+            )
+        for obs in obstacles:
+            pt, pb = _cap_vertical_padding(
+                a.x0, a.y0, a.x1, a.y1, pl, pr, pt, pb, obs.x0, obs.y0, obs.x1, obs.y1,
+                factor=1.0, min_gap=min_gap, touch_tol=touch_tol,
+            )
+        pads_t[i], pads_b[i] = pt, pb
+
+    return [
+        _normalize_rect(
+            pymupdf.Rect(
+                r.x0 - pads_l[i],
+                r.y0 - pads_t[i],
+                r.x1 + pads_r[i],
+                r.y1 + pads_b[i],
+            ),
+            page_w,
+            page_h,
+            page_x0,
+            page_y0,
+            pad_pt=0.0,
+            min_dim=0.002,
+        )
+        for i, r in enumerate(text_rects)
+    ]
+
+
+def extract_page_text_blocks_with_bboxes(page: pymupdf.Page) -> list[tuple[int, str, dict[str, float]]]:
+    """Extract cleaned text blocks from a page with surrounding-text-aware padded bboxes."""
+    page_rect = page.rect
+    pw = page_rect.width or 1.0
+    ph = page_rect.height or 1.0
+    px0 = page_rect.x0
+    py0 = page_rect.y0
+
+    kept: list[tuple[int, str, pymupdf.Rect]] = []
+    obstacles: list[pymupdf.Rect] = []
+    for b_idx, b in enumerate(page.get_text("blocks")):
+        if len(b) > 6 and b[6] != 0:
+            if len(b) >= 4:
+                obstacles.append(pymupdf.Rect(float(b[0]), float(b[1]), float(b[2]), float(b[3])))
+            continue
+        if len(b) >= 5 and b[4] and b[4].strip():
+            txt = b[4].strip()
+            rect = pymupdf.Rect(float(b[0]), float(b[1]), float(b[2]), float(b[3]))
+            if len(txt) < 8 and not any(ch.isalpha() for ch in txt):
+                obstacles.append(rect)
+                continue
+            kept.append((b_idx, txt, rect))
+
+    if not kept:
+        return []
+    bboxes = normalize_context_aware_rects(
+        [r for _, _, r in kept],
+        pw,
+        ph,
+        px0,
+        py0,
+        obstacle_rects=obstacles,
+    )
+    return [(b_idx, txt, bbox) for (b_idx, txt, _), bbox in zip(kept, bboxes)]
 
 
 def _rects_overlap(r1: pymupdf.Rect, r2: pymupdf.Rect, threshold: float = 0.4) -> bool:
@@ -142,6 +316,7 @@ class MultimodalPdfParser:
                     pass
 
                 # ── 2. Image Extraction ───────────────────────────────────────────
+                image_rects: list[pymupdf.Rect] = []
                 try:
                     img_list = page.get_images(full=True)
                     for img_idx, img_info in enumerate(img_list):
@@ -161,6 +336,7 @@ class MultimodalPdfParser:
                         img_rects = page.get_image_rects(xref)
                         if img_rects:
                             img_rect = img_rects[0]
+                            image_rects.append(img_rect)
                             norm_bbox = _normalize_rect(img_rect, page_w, page_h, page_x0, page_y0)
                         else:
                             norm_bbox = {"x": 0.1, "y": 0.1, "w": 0.8, "h": 0.3}
@@ -186,18 +362,22 @@ class MultimodalPdfParser:
                 try:
                     raw_blocks = page.get_text("blocks")
                     valid_blocks: list[dict[str, Any]] = []
+                    obstacle_rects: list[pymupdf.Rect] = [
+                        pymupdf.Rect(r.x0 - 2.0, r.y0 - 2.0, r.x1 + 2.0, r.y1 + 2.0)
+                        for r in (*table_rects, *image_rects)
+                    ]
 
                     for b in raw_blocks:
+                        b_rect = pymupdf.Rect(b[0], b[1], b[2], b[3])
                         # b: (x0, y0, x1, y1, text, block_no, block_type)
                         if len(b) > 6 and b[6] != 0:
-                            # Skip non-text blocks (images/drawings)
+                            # Skip non-text blocks (images/drawings) while treating them as obstacles
+                            obstacle_rects.append(b_rect)
                             continue
 
                         text = b[4].strip()
                         if not text:
                             continue
-
-                        b_rect = pymupdf.Rect(b[0], b[1], b[2], b[3])
 
                         # Skip if block is already captured inside a table
                         if any(_rects_overlap(b_rect, t_rect, 0.4) for t_rect in table_rects):
@@ -207,6 +387,7 @@ class MultimodalPdfParser:
                         y0_rel = (b[1] - page_y0) / page_h
                         y1_rel = (b[3] - page_y0) / page_h
                         if (y1_rel < 0.04 or y0_rel > 0.96) and len(text) < 50:
+                            obstacle_rects.append(b_rect)
                             continue
 
                         clean_t = _clean_text(text)
@@ -250,10 +431,17 @@ class MultimodalPdfParser:
                         else:
                             merged_paragraphs.append(b)
 
-                    # Build ParsedElement for each clean paragraph
-                    for p in merged_paragraphs:
-                        p_rect = pymupdf.Rect(p["x0"], p["y0"], p["x1"], p["y1"])
-                        norm_bbox = _normalize_rect(p_rect, page_w, page_h, page_x0, page_y0)
+                    # Build ParsedElement for each clean paragraph with surrounding-text-aware padding
+                    p_rects = [pymupdf.Rect(p["x0"], p["y0"], p["x1"], p["y1"]) for p in merged_paragraphs]
+                    norm_bboxes = normalize_context_aware_rects(
+                        p_rects,
+                        page_w,
+                        page_h,
+                        page_x0,
+                        page_y0,
+                        obstacle_rects=obstacle_rects,
+                    )
+                    for p, norm_bbox in zip(merged_paragraphs, norm_bboxes):
                         p_text = p["text"]
 
                         # Detect headings: short line without trailing period, or numbered title

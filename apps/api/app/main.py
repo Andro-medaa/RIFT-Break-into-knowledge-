@@ -23,10 +23,13 @@ from app.model.base import create_all_tables
 # Import models to ensure tables are registered with metadata
 import app.model.documents  # noqa: F401
 import app.model.document_chunks  # noqa: F401
+import app.model.conversations  # noqa: F401
 from app.routes.documents import router as documents_router
 from app.routes.sessions import router as sessions_router
 from app.routes.tts import router as tts_router
 from app.routes.stt import router as stt_router
+from app.routes.conversations import router as conversations_router
+from app.services.conversation import conversation_service
 from app.services.storage import storage_service
 
 logger = get_logger("app.main")
@@ -71,6 +74,7 @@ async def lifespan(app: FastAPI):
 
     # Teardown
     logger.info("Shutting down RIFT API server...")
+    await conversation_service.close()
     await close_db()
 
 
@@ -111,6 +115,7 @@ app.include_router(sessions_router)
 app.include_router(tts_router)
 app.include_router(tts_router, prefix="/api")
 app.include_router(stt_router)
+app.include_router(conversations_router, prefix="/api")
 
 
 # ── Health Endpoint ───────────────────────────────────────────────────────────
@@ -133,7 +138,12 @@ async def ping():
 @app.get("/health", tags=["System"])
 async def health_check():
     """Service health check verifying storage bucket, database connectivity, and required tables."""
-    tables_status = {"documents": False, "document_chunks": False}
+    tables_status = {
+        "documents": False,
+        "document_chunks": False,
+        "conversations": False,
+        "chat_messages": False,
+    }
     pgvector_installed = False
     db_connected = False
 
@@ -148,6 +158,8 @@ async def health_check():
                 found = {row[0] for row in res.fetchall()}
                 tables_status["documents"] = "documents" in found
                 tables_status["document_chunks"] = "document_chunks" in found
+                tables_status["conversations"] = "conversations" in found
+                tables_status["chat_messages"] = "chat_messages" in found
 
                 ext_res = await conn.execute(
                     text("SELECT extname FROM pg_extension WHERE extname = 'vector';")

@@ -1,6 +1,7 @@
 /**
- * WaveformAnimation – animated bars that pulse while audio is active.
- * Purely CSS-driven, no Web Audio API needed.
+ * WaveformAnimation – animated audio equalizer bars that pulse while voice/audio is active.
+ * Inspired by RIFT-Break-into-knowledge-, styled in RIFT Cyber-Minimalist Electric Teal.
+ * Purely CSS-driven, zero CPU overhead.
  */
 "use client";
 
@@ -8,57 +9,79 @@ interface WaveformProps {
   active: boolean;
   bars?: number;
   color?: string;
+  gradient?: string;
+  glow?: boolean;
   height?: number;
+  barWidth?: number;
+  gap?: number;
 }
 
 export default function WaveformAnimation({
   active,
-  bars = 18,
-  color = "#B66BC5",
-  height = 32,
+  bars = 14,
+  color = "#00f5d4",
+  gradient,
+  glow = true,
+  height = 20,
+  barWidth = 2.5,
+  gap = 2.5,
 }: WaveformProps) {
+  // Natural vocal formant weights (higher in mid/upper-mid frequencies)
+  const weights = [0.35, 0.6, 0.85, 1.0, 0.75, 0.95, 0.65, 0.82, 0.52, 0.74, 0.9, 0.58];
+
   return (
     <div
       style={{
-        display: "flex",
+        display: "inline-flex",
         alignItems: "center",
-        gap: "3px",
+        gap: `${gap}px`,
         height: `${height}px`,
       }}
       aria-hidden
     >
       {Array.from({ length: bars }).map((_, i) => {
-        const delay = (i * 0.07) % 0.9;
-        const h = active
-          ? `${20 + Math.sin(i * 1.1) * 60}%`
-          : "15%";
+        const weight = weights[i % weights.length];
+        const delay = (i * 0.08) % 0.85;
+        const duration = 0.55 + ((i * 0.11) % 0.45);
+        const barHeightPct = active ? Math.max(25, Math.round(weight * 100)) : 16;
+        const bg = gradient || color;
 
         return (
           <div
             key={i}
             style={{
-              width: "3px",
-              height: active ? `${10 + ((i * 17) % 70)}%` : "15%",
-              background: color,
+              width: `${barWidth}px`,
+              height: `${barHeightPct}%`,
+              background: bg,
               borderRadius: "2px",
-              opacity: active ? 0.85 : 0.3,
-              transition: `height 0.15s ease ${delay}s, opacity 0.3s ease`,
+              opacity: active ? 0.95 : 0.35,
+              boxShadow: active && glow ? `0 0 8px ${color}` : "none",
               animation: active
-                ? `waveBar 0.9s ease-in-out ${delay}s infinite alternate`
+                ? `riftWaveBar ${duration}s ease-in-out ${delay}s infinite alternate`
                 : "none",
               minHeight: "3px",
+              transformOrigin: "center",
+              transition: "opacity 0.2s ease, height 0.2s ease",
             }}
           />
         );
       })}
 
       <style>{`
-        @keyframes waveBar {
-          from { transform: scaleY(0.35); }
-          to   { transform: scaleY(1); }
+        @keyframes riftWaveBar {
+          0% {
+            transform: scaleY(0.28);
+          }
+          50% {
+            transform: scaleY(0.85);
+          }
+          100% {
+            transform: scaleY(1.15);
+          }
         }
       `}</style>
     </div>
   );
 }
+
 
