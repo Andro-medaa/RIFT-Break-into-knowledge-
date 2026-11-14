@@ -637,6 +637,21 @@ function Layout({ documentId }: { documentId?: string }) {
             />
           )}
 
+          {/* Vertical Playback Controls Container (permanently mounted in DOM so portal never disconnects) */}
+          <div
+            id="rift-mobile-vertical-playback"
+            style={{
+              position: "absolute",
+              right: "12px",
+              bottom: "74px",
+              zIndex: 46,
+              display:
+                mobileSheet === "chat" || mobileSheet === "script"
+                  ? "none"
+                  : "block",
+            }}
+          />
+
           {/* Script Section: Collapsed One-Liner or Expanded 76vh Drawer */}
           <div
             style={{

@@ -4,7 +4,22 @@
 
 import type { Document, UploadResponse, DeleteResponse } from "./types";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+export function getApiBase(): string {
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL;
+  }
+  if (typeof window !== "undefined") {
+    // In browser, route through Next.js proxy rewrite on same host/port.
+    // This eliminates mixed-content HTTPS blocks, CORS, and mobile firewall issues with port 8000.
+    return "";
+  }
+  return process.env.BACKEND_INTERNAL_URL || "http://127.0.0.1:8000";
+}
+
+const API_BASE = {
+  toString: () => getApiBase(),
+  valueOf: () => getApiBase(),
+} as unknown as string;
 
 /** Default owner ID for development — will be replaced by real auth. */
 const DEV_OWNER_ID = "rift_user_01";
@@ -144,7 +159,15 @@ export async function queryDocument(
  */
 export async function transcribeAudio(audioBlob: Blob): Promise<string> {
   const formData = new FormData();
-  formData.append("file", audioBlob, "audio.webm");
+  let ext = "webm";
+  if (audioBlob.type.includes("mp4") || audioBlob.type.includes("m4a")) {
+    ext = "mp4";
+  } else if (audioBlob.type.includes("wav")) {
+    ext = "wav";
+  } else if (audioBlob.type.includes("ogg")) {
+    ext = "ogg";
+  }
+  formData.append("file", audioBlob, `audio.${ext}`);
 
   const res = await fetch(`${API_BASE}/api/stt/transcribe`, {
     method: "POST",

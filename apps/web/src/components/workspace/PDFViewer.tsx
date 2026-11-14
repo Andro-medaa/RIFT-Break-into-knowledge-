@@ -43,8 +43,10 @@ import {
   RotateCcw,
   Sparkles,
   X,
+  MoreHorizontal,
 } from "lucide-react";
 import { useWorkspace } from "@/lib/workspace";
+import { useIsMobile } from "@/lib/useIsMobile";
 import type { TranscriptParagraph } from "@/lib/workspace";
 import type { ScriptSegmentItem } from "@/lib/api";
 import {
@@ -859,6 +861,8 @@ export default function PDFViewer() {
   // Mini-map + spotlight state
   const [miniMapOpen, setMiniMapOpen] = useState(false);
   const [spotlight, setSpotlight]     = useState(false);
+  const isMobile = useIsMobile(768);
+  const [toolsMenuOpen, setToolsMenuOpen] = useState(false);
 
   /* ── Measure available panel width ── */
   useLayoutEffect(() => {
@@ -1116,12 +1120,14 @@ export default function PDFViewer() {
         style={{
           display: "flex",
           alignItems: "center",
-          gap: "6px",
-          padding: "7px 12px",
+          gap: isMobile ? "4px" : "6px",
+          padding: isMobile ? "4px 8px" : "7px 12px",
           background: "rgba(1, 4, 7, 0.96)",
           borderBottom: "1px solid rgba(0, 245, 212, 0.12)",
           flexShrink: 0,
-          flexWrap: "wrap",
+          flexWrap: isMobile ? "nowrap" : "wrap",
+          position: "relative",
+          zIndex: 10,
         }}
       >
         {/* Page navigation */}
@@ -1130,18 +1136,18 @@ export default function PDFViewer() {
           onClick={() => scrollToPage(currentPage - 1)}
           disabled={currentPage <= 1}
         >
-          <ChevronLeft size={15} />
+          <ChevronLeft size={isMobile ? 14 : 15} />
         </CtrlBtn>
 
         <span
           style={{
-            fontSize: "11.5px",
+            fontSize: isMobile ? "10.5px" : "11.5px",
             fontFamily: "var(--font-mono)",
             color: "#5eead4",
-            minWidth: "60px",
+            minWidth: isMobile ? "48px" : "60px",
             textAlign: "center",
             background: "rgba(0, 245, 212, 0.08)",
-            padding: "3px 8px",
+            padding: isMobile ? "2px 6px" : "3px 8px",
             borderRadius: "6px",
             border: "1px solid rgba(0, 245, 212, 0.2)",
           }}
@@ -1154,25 +1160,35 @@ export default function PDFViewer() {
           onClick={() => scrollToPage(currentPage + 1)}
           disabled={currentPage >= numPages}
         >
-          <ChevronRight size={15} />
+          <ChevronRight size={isMobile ? 14 : 15} />
         </CtrlBtn>
 
-        <div style={{ width: "1px", height: "18px", background: "rgba(0, 245, 212, 0.15)", margin: "0 2px" }} />
+        <div
+          style={{
+            width: "1px",
+            height: "18px",
+            background: "rgba(0, 245, 212, 0.15)",
+            margin: "0 2px",
+          }}
+        />
 
         {/* Zoom */}
-        <CtrlBtn title="Zoom out (-)" onClick={() => setZoom(Math.max(0.3, zoom - 0.1))}>
-          <ZoomOut size={15} />
+        <CtrlBtn
+          title="Zoom out (-)"
+          onClick={() => setZoom(Math.max(0.3, zoom - 0.1))}
+        >
+          <ZoomOut size={isMobile ? 14 : 15} />
         </CtrlBtn>
 
         <span
           style={{
-            fontSize: "11px",
+            fontSize: isMobile ? "10px" : "11px",
             fontFamily: "var(--font-mono)",
             color: "#00f5d4",
-            minWidth: "44px",
+            minWidth: isMobile ? "38px" : "44px",
             textAlign: "center",
             background: "rgba(0, 245, 212, 0.08)",
-            padding: "3px 7px",
+            padding: isMobile ? "2px 5px" : "3px 7px",
             borderRadius: "6px",
             border: "1px solid rgba(0, 245, 212, 0.2)",
           }}
@@ -1180,38 +1196,288 @@ export default function PDFViewer() {
           {Math.round(zoom * 100)}%
         </span>
 
-        <CtrlBtn title="Zoom in (+)" onClick={() => setZoom(Math.min(3.0, zoom + 0.1))}>
-          <ZoomIn size={15} />
+        <CtrlBtn
+          title="Zoom in (+)"
+          onClick={() => setZoom(Math.min(3.0, zoom + 0.1))}
+        >
+          <ZoomIn size={isMobile ? 14 : 15} />
         </CtrlBtn>
 
-        <CtrlBtn title="Fit to width" onClick={fitToWidth}>
-          <Maximize2 size={14} />
-        </CtrlBtn>
-
-        <div style={{ width: "1px", height: "18px", background: "rgba(0, 245, 212, 0.15)", margin: "0 2px" }} />
-
-        {/* Pan / Select mode */}
-        <CtrlBtn title="Select text mode" onClick={() => panMode && togglePanMode()} active={!panMode}>
-          <MousePointer2 size={14} />
-        </CtrlBtn>
-        <CtrlBtn title="Pan/drag mode" onClick={() => !panMode && togglePanMode()} active={panMode}>
-          <Hand size={14} />
-        </CtrlBtn>
-
-        <div style={{ width: "1px", height: "18px", background: "rgba(0, 245, 212, 0.15)", margin: "0 2px" }} />
-
-        {/* Spotlight */}
-        <CtrlBtn title="Spotlight mode (S)" onClick={() => setSpotlight((v) => !v)} active={spotlight}>
-          <Scan size={14} />
-        </CtrlBtn>
-
-        {/* Mini-map toggle */}
-        <CtrlBtn title="Mini-map (M)" onClick={() => setMiniMapOpen((v) => !v)} active={miniMapOpen}>
-          {miniMapOpen ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
-        </CtrlBtn>
-
+        {/* Spacer */}
         <div style={{ flex: 1 }} />
+
+        {/* Desktop secondary controls */}
+        {!isMobile && (
+          <>
+            <CtrlBtn title="Fit to width" onClick={fitToWidth}>
+              <Maximize2 size={14} />
+            </CtrlBtn>
+
+            <div
+              style={{
+                width: "1px",
+                height: "18px",
+                background: "rgba(0, 245, 212, 0.15)",
+                margin: "0 2px",
+              }}
+            />
+
+            {/* Pan / Select mode */}
+            <CtrlBtn
+              title="Select text mode"
+              onClick={() => panMode && togglePanMode()}
+              active={!panMode}
+            >
+              <MousePointer2 size={14} />
+            </CtrlBtn>
+            <CtrlBtn
+              title="Pan/drag mode"
+              onClick={() => !panMode && togglePanMode()}
+              active={panMode}
+            >
+              <Hand size={14} />
+            </CtrlBtn>
+
+            <div
+              style={{
+                width: "1px",
+                height: "18px",
+                background: "rgba(0, 245, 212, 0.15)",
+                margin: "0 2px",
+              }}
+            />
+
+            {/* Spotlight */}
+            <CtrlBtn
+              title="Spotlight mode (S)"
+              onClick={() => setSpotlight((v) => !v)}
+              active={spotlight}
+            >
+              <Scan size={14} />
+            </CtrlBtn>
+
+            {/* Mini-map toggle */}
+            <CtrlBtn
+              title="Mini-map (M)"
+              onClick={() => setMiniMapOpen((v) => !v)}
+              active={miniMapOpen}
+            >
+              {miniMapOpen ? (
+                <PanelLeftClose size={14} />
+              ) : (
+                <PanelLeftOpen size={14} />
+              )}
+            </CtrlBtn>
+          </>
+        )}
+
+        {/* Mobile Expand / More button */}
+        {isMobile && (
+          <CtrlBtn
+            title="More PDF tools"
+            onClick={() => setToolsMenuOpen((v) => !v)}
+            active={toolsMenuOpen}
+          >
+            <MoreHorizontal size={15} />
+          </CtrlBtn>
+        )}
       </div>
+
+      {/* ── Mobile Floating Tools Popover ── */}
+      {isMobile && toolsMenuOpen && (
+        <>
+          <div
+            onClick={() => setToolsMenuOpen(false)}
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 99,
+            }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              top: "42px",
+              right: "8px",
+              background: "rgba(3, 12, 18, 0.96)",
+              backdropFilter: "blur(20px)",
+              WebkitBackdropFilter: "blur(20px)",
+              border: "1px solid rgba(0, 245, 212, 0.35)",
+              borderRadius: "14px",
+              padding: "8px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "6px",
+              boxShadow:
+                "0 10px 30px rgba(0, 0, 0, 0.85), 0 0 15px rgba(0, 245, 212, 0.15)",
+              zIndex: 100,
+              minWidth: "165px",
+              animation: "fadeIn 0.15s ease-out",
+            }}
+          >
+            {/* Fit to Width */}
+            <button
+              type="button"
+              onClick={() => {
+                fitToWidth();
+                setToolsMenuOpen(false);
+              }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                padding: "7px 10px",
+                borderRadius: "8px",
+                background: "rgba(255, 255, 255, 0.05)",
+                border: "1px solid rgba(0, 245, 212, 0.15)",
+                color: "#e2e8f0",
+                fontSize: "12px",
+                fontFamily: "var(--font-mono)",
+                cursor: "pointer",
+                textAlign: "left",
+              }}
+            >
+              <Maximize2 size={13} color="#00f5d4" />
+              <span>Fit to Width</span>
+            </button>
+
+            {/* Select Mode */}
+            <button
+              type="button"
+              onClick={() => {
+                if (panMode) togglePanMode();
+                setToolsMenuOpen(false);
+              }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                padding: "7px 10px",
+                borderRadius: "8px",
+                background: !panMode
+                  ? "rgba(0, 245, 212, 0.15)"
+                  : "rgba(255, 255, 255, 0.05)",
+                border: `1px solid ${
+                  !panMode
+                    ? "rgba(0, 245, 212, 0.5)"
+                    : "rgba(0, 245, 212, 0.15)"
+                }`,
+                color: !panMode ? "#00f5d4" : "#e2e8f0",
+                fontSize: "12px",
+                fontFamily: "var(--font-mono)",
+                cursor: "pointer",
+                textAlign: "left",
+              }}
+            >
+              <MousePointer2
+                size={13}
+                color={!panMode ? "#00f5d4" : "#94a3b8"}
+              />
+              <span>Select Mode</span>
+            </button>
+
+            {/* Pan / Drag Mode */}
+            <button
+              type="button"
+              onClick={() => {
+                if (!panMode) togglePanMode();
+                setToolsMenuOpen(false);
+              }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                padding: "7px 10px",
+                borderRadius: "8px",
+                background: panMode
+                  ? "rgba(0, 245, 212, 0.15)"
+                  : "rgba(255, 255, 255, 0.05)",
+                border: `1px solid ${
+                  panMode
+                    ? "rgba(0, 245, 212, 0.5)"
+                    : "rgba(0, 245, 212, 0.15)"
+                }`,
+                color: panMode ? "#00f5d4" : "#e2e8f0",
+                fontSize: "12px",
+                fontFamily: "var(--font-mono)",
+                cursor: "pointer",
+                textAlign: "left",
+              }}
+            >
+              <Hand size={13} color={panMode ? "#00f5d4" : "#94a3b8"} />
+              <span>Pan / Drag</span>
+            </button>
+
+            {/* Spotlight Mode */}
+            <button
+              type="button"
+              onClick={() => {
+                setSpotlight((v) => !v);
+                setToolsMenuOpen(false);
+              }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                padding: "7px 10px",
+                borderRadius: "8px",
+                background: spotlight
+                  ? "rgba(0, 245, 212, 0.15)"
+                  : "rgba(255, 255, 255, 0.05)",
+                border: `1px solid ${
+                  spotlight
+                    ? "rgba(0, 245, 212, 0.5)"
+                    : "rgba(0, 245, 212, 0.15)"
+                }`,
+                color: spotlight ? "#00f5d4" : "#e2e8f0",
+                fontSize: "12px",
+                fontFamily: "var(--font-mono)",
+                cursor: "pointer",
+                textAlign: "left",
+              }}
+            >
+              <Scan size={13} color={spotlight ? "#00f5d4" : "#94a3b8"} />
+              <span>Spotlight {spotlight ? "(ON)" : "(OFF)"}</span>
+            </button>
+
+            {/* Mini-map Thumbnails */}
+            <button
+              type="button"
+              onClick={() => {
+                setMiniMapOpen((v) => !v);
+                setToolsMenuOpen(false);
+              }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                padding: "7px 10px",
+                borderRadius: "8px",
+                background: miniMapOpen
+                  ? "rgba(0, 245, 212, 0.15)"
+                  : "rgba(255, 255, 255, 0.05)",
+                border: `1px solid ${
+                  miniMapOpen
+                    ? "rgba(0, 245, 212, 0.5)"
+                    : "rgba(0, 245, 212, 0.15)"
+                }`,
+                color: miniMapOpen ? "#00f5d4" : "#e2e8f0",
+                fontSize: "12px",
+                fontFamily: "var(--font-mono)",
+                cursor: "pointer",
+                textAlign: "left",
+              }}
+            >
+              {miniMapOpen ? (
+                <PanelLeftClose size={13} color="#00f5d4" />
+              ) : (
+                <PanelLeftOpen size={13} color="#94a3b8" />
+              )}
+              <span>Thumbnails</span>
+            </button>
+          </div>
+        </>
+      )}
 
       {/* ── Body: scrollable PDF + optional mini-map ── */}
       <div style={{ flex: 1, minHeight: 0, display: "flex", overflow: "hidden" }}>

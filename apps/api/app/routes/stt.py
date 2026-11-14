@@ -35,9 +35,21 @@ async def transcribe_audio(file: UploadFile = File(...)):
                 message="Audio file is empty or too short",
             )
 
-        mime_type = file.content_type or "audio/webm"
-        # Normalize mime type for common audio containers
-        if "webm" in mime_type:
+        mime_type = file.content_type or ""
+        if file.filename:
+            fn = file.filename.lower()
+            if fn.endswith(".mp4") or fn.endswith(".m4a"):
+                mime_type = "audio/mp4"
+            elif fn.endswith(".wav"):
+                mime_type = "audio/wav"
+            elif fn.endswith(".ogg"):
+                mime_type = "audio/ogg"
+            elif fn.endswith(".webm"):
+                mime_type = "audio/webm"
+
+        if not mime_type or "octet-stream" in mime_type:
+            mime_type = "audio/webm"
+        elif "webm" in mime_type:
             mime_type = "audio/webm"
         elif "wav" in mime_type:
             mime_type = "audio/wav"
@@ -68,10 +80,14 @@ async def transcribe_audio(file: UploadFile = File(...)):
                     contents=[prompt, audio_part],
                     config=types.GenerateContentConfig(
                         temperature=0.0,
-                        max_output_tokens=150,
+                        max_output_tokens=500,
                     ),
                 )
                 transcribed = (resp.text or "").strip()
+                if transcribed.startswith("```"):
+                    lines = transcribed.split("\n")
+                    if len(lines) >= 3 and lines[-1].startswith("```"):
+                        transcribed = "\n".join(lines[1:-1]).strip()
                 # Remove surrounding quotes if Gemini wraps the transcription
                 if (transcribed.startswith('"') and transcribed.endswith('"')) or (
                     transcribed.startswith("'") and transcribed.endswith("'")

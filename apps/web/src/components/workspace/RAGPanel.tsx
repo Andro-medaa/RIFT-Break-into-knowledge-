@@ -43,6 +43,9 @@ import {
   SlidersHorizontal,
   X,
   Image as ImageIcon,
+  Lock,
+  ShieldAlert,
+  AlertTriangle,
 } from "lucide-react";
 import {
   queryDocument,
@@ -594,6 +597,22 @@ export default function RAGPanel({
   const voiceRecRef = useRef<any>(null);
   const baseTextRef = useRef<string>("");
   const hasWebSpeechProducedTextRef = useRef<boolean>(false);
+
+  // Track microphone permission state: "unknown" | "prompt" | "granted" | "denied" | "insecure"
+  const [micPermissionState, setMicPermissionState] = useState<
+    "unknown" | "prompt" | "granted" | "denied" | "insecure"
+  >("unknown");
+  const [showPermissionModal, setShowPermissionModal] = useState(false);
+  const [copiedFlagUrl, setCopiedFlagUrl] = useState(false);
+
+  // VAD & Voice Typing Silence Monitoring
+  const isVoiceTypingRef = useRef(false);
+  useEffect(() => {
+    isVoiceTypingRef.current = isVoiceTyping;
+  }, [isVoiceTyping]);
+  const voiceTypingSilenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const voiceTypingAudioCtxRef = useRef<AudioContext | null>(null);
+  const stopVoiceTypingRef = useRef<() => void>(() => {});
 
   // Audio dictation for answers
   const answerAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -1307,25 +1326,156 @@ export default function RAGPanel({
     setTimeout(() => setCopiedMsgId(null), 1500);
   }, []);
 
+  /* ── Check & Track Microphone Permission ────────────────────────────────── */
+  const checkMicPermission = useCallback(async () => {
+    if (typeof window === "undefined") return;
+
+    // Mobile browsers (Chrome on Android, Safari on iOS) strictly block microphone access
+    // on insecure HTTP origins (LAN IP like 192.168.x.x:3000).
+    if (!window.isSecureContext) {
+      setMicPermissionState("insecure");
+      return;
+    }
+
+    if (typeof navigator !== "undefined" && navigator.permissions?.query) {
+      try {
+        const perm = await navigator.permissions.query({
+          name: "microphone" as PermissionName,
+        });
+        setMicPermissionState(perm.state as "granted" | "prompt" | "denied");
+        perm.onchange = () => {
+          setMicPermissionState(perm.state as "granted" | "prompt" | "denied");
+        };
+        return;
+      } catch {
+        // Fallback for browsers that throw on querying microphone permission
+      }
+    }
+
+    if (
+      typeof navigator === "undefined" ||
+      !navigator.mediaDevices ||
+      !navigator.mediaDevices.getUserMedia
+    ) {
+      setMicPermissionState("insecure");
+    } else {
+      setMicPermissionState("prompt");
+    }
+  }, []);
+
+  useEffect(() => {
+    checkMicPermission();
+  }, [checkMicPermission]);
+
+  /* ── Proactive User Permission Request ─────────────────────────────────── */
+  const requestMicPermission = useCallback(async () => {
+    if (typeof window === "undefined") return false;
+
+    const hasGetUserMedia = Boolean(
+      navigator?.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function"
+    );
+
+    if (!hasGetUserMedia) {
+      setMicPermissionState("insecure");
+      setVoiceError("Microphone requires HTTPS or a secure context on mobile browsers.");
+      setShowPermissionModal(true);
+      return false;
+    }
+
+    try {
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+      } catch (firstErr: any) {
+        if (firstErr?.name === "NotAllowedError" || firstErr?.name === "PermissionDeniedError") {
+          throw firstErr;
+        }
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
+      micStreamRef.current = stream;
+      setActiveMicStream(stream);
+      setMicPermissionState("granted");
+      setVoiceError(null);
+      setShowPermissionModal(false);
+      return true;
+    } catch (err: any) {
+      console.warn("Microphone permission request error:", err);
+      if (
+        err?.name === "NotAllowedError" ||
+        err?.name === "PermissionDeniedError"
+      ) {
+        setMicPermissionState("denied");
+        setVoiceError("Microphone permission denied. Tap to open instructions.");
+      } else if (err?.name === "SecurityError") {
+        setMicPermissionState("insecure");
+        setVoiceError("Microphone blocked by browser security (requires HTTPS or secure origin).");
+      } else {
+        setVoiceError(`Microphone error: ${err?.message || err?.name || "Access blocked"}`);
+      }
+      setShowPermissionModal(true);
+      return false;
+    }
+  }, []);
+
   /* ── Acquire Clean Hardware Audio Stream ────────────────────────────────── */
   const getCleanMicStream = useCallback(async () => {
     if (micStreamRef.current && micStreamRef.current.active) {
       return micStreamRef.current;
     }
+    if (typeof window === "undefined") return null;
+
+    const hasGetUserMedia = Boolean(
+      navigator?.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function"
+    );
+
+    if (!hasGetUserMedia) {
+      setMicPermissionState("insecure");
+      setShowPermissionModal(true);
+      return null;
+    }
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          channelCount: 1,
-          sampleRate: 16000,
-        },
-      });
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+      } catch (firstErr: any) {
+        if (firstErr?.name === "NotAllowedError" || firstErr?.name === "PermissionDeniedError") {
+          throw firstErr;
+        }
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
       micStreamRef.current = stream;
+      setMicPermissionState("granted");
+      setVoiceError(null);
       return stream;
-    } catch (err) {
-      console.warn("Could not acquire audio stream with constraints:", err);
+    } catch (err: any) {
+      console.warn("Could not acquire audio stream:", err);
+      if (
+        err?.name === "NotAllowedError" ||
+        err?.name === "PermissionDeniedError"
+      ) {
+        setMicPermissionState("denied");
+        setVoiceError("Microphone permission denied. Tap to open instructions.");
+        setShowPermissionModal(true);
+      } else if (err?.name === "SecurityError") {
+        setMicPermissionState("insecure");
+        setVoiceError("Microphone blocked by browser security (requires HTTPS or secure origin).");
+        setShowPermissionModal(true);
+      } else {
+        setVoiceError(`Microphone error: ${err?.message || err?.name || "Access blocked"}`);
+      }
       return null;
     }
   }, []);
@@ -1344,15 +1494,22 @@ export default function RAGPanel({
           options = { mimeType: "audio/webm" };
         } else if (MediaRecorder.isTypeSupported("audio/mp4")) {
           options = { mimeType: "audio/mp4" };
+        } else if (MediaRecorder.isTypeSupported("audio/aac")) {
+          options = { mimeType: "audio/aac" };
         }
       }
-      const mr = new MediaRecorder(stream, options);
+      let mr: MediaRecorder;
+      try {
+        mr = new MediaRecorder(stream, options);
+      } catch {
+        mr = new MediaRecorder(stream);
+      }
       mr.ondataavailable = (e) => {
         if (e.data && e.data.size > 0) {
           audioChunksRef.current.push(e.data);
         }
       };
-      mr.start(200);
+      mr.start(150);
       mediaRecorderRef.current = mr;
     } catch (err) {
       console.warn("MediaRecorder start error:", err);
@@ -1360,9 +1517,18 @@ export default function RAGPanel({
   }, [getCleanMicStream]);
 
   const stopMediaRecordingAndTranscribe = useCallback(async (): Promise<string> => {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const mr = mediaRecorderRef.current;
       if (!mr || mr.state === "inactive") {
+        if (audioChunksRef.current.length > 0) {
+          const mime = (audioChunksRef.current[0] && audioChunksRef.current[0].type) || "audio/webm";
+          const blob = new Blob(audioChunksRef.current, { type: mime });
+          audioChunksRef.current = [];
+          if (blob.size >= 80) {
+            transcribeAudio(blob).then(resolve).catch(reject);
+            return;
+          }
+        }
         resolve("");
         return;
       }
@@ -1372,21 +1538,24 @@ export default function RAGPanel({
             resolve("");
             return;
           }
-          const mime = mr.mimeType || "audio/webm";
+          const mime = mr.mimeType || (audioChunksRef.current[0] && audioChunksRef.current[0].type) || "audio/webm";
           const blob = new Blob(audioChunksRef.current, { type: mime });
           audioChunksRef.current = [];
-          if (blob.size < 400) {
+          if (blob.size < 80) {
             resolve("");
             return;
           }
           const text = await transcribeAudio(blob);
           resolve(text);
         } catch (err) {
-          console.warn("transcribeAudio error:", err);
-          resolve("");
+          console.error("transcribeAudio error:", err);
+          reject(err);
         }
       };
       try {
+        if (mr.state === "recording") {
+          mr.requestData();
+        }
         mr.stop();
       } catch {
         resolve("");
@@ -1880,8 +2049,8 @@ export default function RAGPanel({
         return;
       }
       if (errType === "network") {
-        // Browser cloud STT blocked (Brave, VPN, ad-blocker) — show notice
-        setVoiceNotice("Listening mode: browser cloud STT offline. Check your network or browser settings.");
+        // Browser cloud STT blocked (Brave, mobile Chrome, VPN, ad-blocker) — show notice
+        setVoiceNotice("Mobile browser cloud STT offline. Tap the mic button in the message bar to speak with Gemini Flash AI!");
       } else if (errType === "not-allowed") {
         setVoiceError("Microphone permission denied. Please allow microphone access.");
       } else {
@@ -1969,20 +2138,25 @@ export default function RAGPanel({
       setVoiceNotice(null);
       setVoiceError(null);
 
+      // Verify microphone access FIRST before activating listening mode
+      const stream = await getCleanMicStream();
+      if (!stream) {
+        // getCleanMicStream already flagged insecure context or denied permission
+        return;
+      }
+
       setListeningMode(true);
       isListeningModeActiveRef.current = true;
-      try {
-        const stream = await getCleanMicStream();
-        if (stream) {
-          setActiveMicStream(stream);
+      setActiveMicStream(stream);
+
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.start();
+        } catch (err) {
+          console.warn("SpeechRec start error:", err);
         }
-      } catch (err) {
-        console.warn("Could not acquire mic stream:", err);
-      }
-      try {
-        recognitionRef.current?.start();
-      } catch (err) {
-        console.warn("SpeechRec start error:", err);
+      } else {
+        setVoiceNotice("Continuous mode is not supported on this mobile browser. Tap the mic icon below to voice type with Gemini Flash AI!");
       }
     } else {
       setListeningMode(false);
@@ -2007,6 +2181,77 @@ export default function RAGPanel({
   }, [isVoiceTyping, listeningMode, getCleanMicStream]);
 
   /* ── Dedicated Voice Input Typing (Web Speech API + Backend Gemini Flash STT) ── */
+  const stopVoiceTyping = useCallback(async () => {
+    if (voiceTypingSilenceTimerRef.current) {
+      clearTimeout(voiceTypingSilenceTimerRef.current);
+      voiceTypingSilenceTimerRef.current = null;
+    }
+    if (voiceTypingAudioCtxRef.current) {
+      try {
+        voiceTypingAudioCtxRef.current.close();
+      } catch {}
+      voiceTypingAudioCtxRef.current = null;
+    }
+
+    setIsVoiceTyping(false);
+    isVoiceTypingRef.current = false;
+    setInterimTranscript("");
+
+    if (voiceRecRef.current) {
+      try {
+        voiceRecRef.current.stop();
+      } catch {}
+      voiceRecRef.current = null;
+    }
+
+    // If Web Speech API already transcribed speech, we are done!
+    if (hasWebSpeechProducedTextRef.current) {
+      setVoiceNotice("Transcribed!");
+      setTimeout(() => setVoiceNotice(null), 2000);
+      setTimeout(() => {
+        if (inputRef.current) {
+          inputRef.current.focus();
+          const len = inputRef.current.value.length;
+          inputRef.current.setSelectionRange(len, len);
+        }
+      }, 60);
+      return;
+    }
+
+    // If Web Speech API gave a 'network' error or produced no text:
+    // Transcribe with the Gemini Flash AI backend STT!
+    setIsTranscribing(true);
+    setVoiceNotice("Transcribing with Gemini Flash AI…");
+    try {
+      const text = await stopMediaRecordingAndTranscribe();
+      if (text && text.trim()) {
+        const base = baseTextRef.current;
+        const fullText = base ? `${base} ${text.trim()}` : text.trim();
+        setInput(fullText);
+        setVoiceTranscript(text.trim());
+        setVoiceNotice("Transcribed!");
+        setTimeout(() => setVoiceNotice(null), 2500);
+      } else {
+        setVoiceNotice(null);
+      }
+    } catch (err: any) {
+      console.warn("Backend STT transcription error:", err);
+      setVoiceError(err?.message || "Audio transcription failed. Please try again.");
+      setVoiceNotice(null);
+    } finally {
+      setIsTranscribing(false);
+      setTimeout(() => {
+        if (inputRef.current) {
+          inputRef.current.focus();
+          const len = inputRef.current.value.length;
+          inputRef.current.setSelectionRange(len, len);
+        }
+      }, 60);
+    }
+  }, [stopMediaRecordingAndTranscribe]);
+
+  stopVoiceTypingRef.current = stopVoiceTyping;
+
   const startVoiceTyping = useCallback(async () => {
     if (typeof window === "undefined") return;
 
@@ -2026,6 +2271,16 @@ export default function RAGPanel({
       } catch {}
       voiceRecRef.current = null;
     }
+    if (voiceTypingSilenceTimerRef.current) {
+      clearTimeout(voiceTypingSilenceTimerRef.current);
+      voiceTypingSilenceTimerRef.current = null;
+    }
+    if (voiceTypingAudioCtxRef.current) {
+      try {
+        voiceTypingAudioCtxRef.current.close();
+      } catch {}
+      voiceTypingAudioCtxRef.current = null;
+    }
 
     setVoiceError(null);
     setVoiceNotice(null);
@@ -2033,12 +2288,79 @@ export default function RAGPanel({
     hasWebSpeechProducedTextRef.current = false;
     baseTextRef.current = input.trim();
 
-    // 1. Immediately start capturing microphone audio into local MediaRecorder
-    // This runs 100% locally in the browser and NEVER fails with a 'network' error!
+    // 1. Immediately request / acquire microphone audio stream
+    // This MUST run directly inside the user's tap gesture so the browser can prompt for permission!
+    const stream = await getCleanMicStream();
+    if (!stream) {
+      return;
+    }
+
     await startMediaRecording();
     setIsVoiceTyping(true);
+    isVoiceTypingRef.current = true;
 
-    // 2. Concurrently attempt browser Web Speech API for real-time live typing
+    // 2. Attach Web Audio VAD for automated silence detection on mobile
+    try {
+      const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioCtxClass) {
+        const audioCtx = new AudioCtxClass();
+        if (audioCtx.state === "suspended") {
+          audioCtx.resume();
+        }
+        voiceTypingAudioCtxRef.current = audioCtx;
+        const source = audioCtx.createMediaStreamSource(stream);
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 512;
+        analyser.smoothingTimeConstant = 0.3;
+        source.connect(analyser);
+
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+        let speechDetected = false;
+        let silenceStartTime: number | null = null;
+        const sessionStartTime = Date.now();
+
+        const checkAudioEnergy = () => {
+          if (!isVoiceTypingRef.current) return;
+          analyser.getByteFrequencyData(dataArray);
+
+          // Calculate average audio frequency energy
+          let sum = 0;
+          for (let i = 0; i < dataArray.length; i++) {
+            sum += dataArray[i];
+          }
+          const avgEnergy = sum / dataArray.length;
+
+          // Energy threshold for active human voice
+          if (avgEnergy > 14) {
+            speechDetected = true;
+            silenceStartTime = null;
+          } else if (speechDetected) {
+            // Speech was detected previously; now we have a pause/silence
+            if (silenceStartTime === null) {
+              silenceStartTime = Date.now();
+            } else if (Date.now() - silenceStartTime > 1700) {
+              // 1.7 seconds of continuous silence after speech: AUTO-STOP & TRANSCRIBE!
+              stopVoiceTypingRef.current();
+              return;
+            }
+          }
+
+          // Safety ceiling: auto-stop after 25s continuous recording
+          if (Date.now() - sessionStartTime > 25000) {
+            stopVoiceTypingRef.current();
+            return;
+          }
+
+          voiceTypingSilenceTimerRef.current = setTimeout(checkAudioEnergy, 100);
+        };
+
+        voiceTypingSilenceTimerRef.current = setTimeout(checkAudioEnergy, 250);
+      }
+    } catch (vadErr) {
+      console.warn("Web Audio VAD initialization error:", vadErr);
+    }
+
+    // 3. Concurrently attempt browser Web Speech API for real-time live typing
     const SpeechRecognition =
       (window as any).SpeechRecognition ||
       (window as any).webkitSpeechRecognition;
@@ -2061,6 +2383,7 @@ export default function RAGPanel({
 
         rec.onstart = () => {
           setIsVoiceTyping(true);
+          isVoiceTypingRef.current = true;
         };
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -2099,11 +2422,14 @@ export default function RAGPanel({
           if (errType === "network") {
             // Browser cloud speech service unreachable (Brave Shield, VPN, ad blocker)
             // DO NOT stop recording! Local MediaRecorder is actively recording audio for backend Gemini STT!
-            setVoiceNotice("Browser cloud STT offline — recording with Gemini Flash AI STT. Keep speaking…");
+            setVoiceNotice("Listening… (Gemini Flash AI STT)");
             console.warn("Web Speech API network error: will transcribe with Gemini Flash backend STT.");
           } else if (errType === "not-allowed") {
-            setVoiceError("Microphone permission denied. Please allow microphone in browser.");
+            setMicPermissionState("denied");
+            setVoiceError("Microphone permission denied. Tap to allow in browser.");
             setIsVoiceTyping(false);
+            isVoiceTypingRef.current = false;
+            setShowPermissionModal(true);
           } else {
             setVoiceNotice(`Using backend AI STT (${errType})`);
           }
@@ -2117,62 +2443,12 @@ export default function RAGPanel({
         rec.start();
       } catch (err: any) {
         console.warn("Web Speech start error; using backend STT:", err);
-        setVoiceNotice("Recording with Gemini Flash AI STT…");
+        setVoiceNotice("Listening… (Gemini Flash AI STT)");
       }
     } else {
-      setVoiceNotice("Recording with Gemini Flash AI STT…");
+      setVoiceNotice("Listening… (Gemini Flash AI STT)");
     }
-  }, [input, selectedLang, listeningMode, startMediaRecording]);
-
-  const stopVoiceTyping = useCallback(async () => {
-    setIsVoiceTyping(false);
-    setInterimTranscript("");
-
-    if (voiceRecRef.current) {
-      try {
-        voiceRecRef.current.stop();
-      } catch {}
-      voiceRecRef.current = null;
-    }
-
-    // If Web Speech API already transcribed speech, we are done!
-    if (hasWebSpeechProducedTextRef.current) {
-      setTimeout(() => {
-        if (inputRef.current) {
-          inputRef.current.focus();
-          const len = inputRef.current.value.length;
-          inputRef.current.setSelectionRange(len, len);
-        }
-      }, 60);
-      return;
-    }
-
-    // If Web Speech API gave a 'network' error or produced no text:
-    // Transcribe with the Gemini Flash AI backend STT!
-    setIsTranscribing(true);
-    try {
-      const text = await stopMediaRecordingAndTranscribe();
-      if (text && text.trim()) {
-        const base = baseTextRef.current;
-        const fullText = base ? `${base} ${text.trim()}` : text.trim();
-        setInput(fullText);
-        setVoiceTranscript(text.trim());
-        setVoiceNotice(null);
-      }
-    } catch (err: any) {
-      console.warn("Backend STT transcription error:", err);
-      setVoiceError("Audio transcription failed. Please try again.");
-    } finally {
-      setIsTranscribing(false);
-      setTimeout(() => {
-        if (inputRef.current) {
-          inputRef.current.focus();
-          const len = inputRef.current.value.length;
-          inputRef.current.setSelectionRange(len, len);
-        }
-      }, 60);
-    }
-  }, [stopMediaRecordingAndTranscribe]);
+  }, [input, selectedLang, listeningMode, startMediaRecording, getCleanMicStream]);
 
   const toggleVoiceTyping = useCallback(() => {
     if (isVoiceTyping) {
@@ -3389,28 +3665,116 @@ export default function RAGPanel({
               color: "#fca5a5",
               background: "rgba(239, 68, 68, 0.15)",
               border: "1px solid rgba(239, 68, 68, 0.3)",
-              borderRadius: "6px",
-              padding: "4px 8px",
+              borderRadius: "8px",
+              padding: "6px 10px",
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
               gap: "8px",
             }}
           >
-            <span>⚠️ {voiceError}</span>
-            <button
-              onClick={() => setVoiceError(null)}
+            <div style={{ display: "flex", alignItems: "center", gap: "6px", flex: 1, minWidth: 0 }}>
+              <AlertTriangle size={13} style={{ flexShrink: 0, color: "#f87171" }} />
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{voiceError}</span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 }}>
+              <button
+                type="button"
+                onClick={() => setShowPermissionModal(true)}
+                style={{
+                  background: "rgba(239, 68, 68, 0.3)",
+                  border: "1px solid rgba(239, 68, 68, 0.5)",
+                  color: "#fff",
+                  borderRadius: "5px",
+                  padding: "2px 7px",
+                  fontSize: "10.5px",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                Fix / Allow
+              </button>
+              <button
+                type="button"
+                onClick={() => setVoiceError(null)}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "#fca5a5",
+                  cursor: "pointer",
+                  fontSize: "12px",
+                  padding: "0 2px",
+                }}
+                title="Dismiss"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Proactive Mobile Microphone Access Prompt when not yet granted */}
+        {isMobile && !voiceError && micPermissionState !== "granted" && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "5px 10px",
+              borderRadius: "7px",
+              background:
+                micPermissionState === "insecure"
+                  ? "rgba(245, 158, 11, 0.12)"
+                  : "rgba(0, 245, 212, 0.08)",
+              border:
+                micPermissionState === "insecure"
+                  ? "1px solid rgba(245, 158, 11, 0.3)"
+                  : "1px solid rgba(0, 245, 212, 0.25)",
+              fontSize: "11px",
+            }}
+          >
+            <div
               style={{
-                background: "transparent",
-                border: "none",
-                color: "#fca5a5",
-                cursor: "pointer",
-                fontSize: "11px",
-                padding: "0 4px",
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                color: micPermissionState === "insecure" ? "#fbbf24" : "#5eead4",
               }}
-              title="Dismiss"
             >
-              ✕
+              {micPermissionState === "insecure" ? <Lock size={12} /> : <Mic size={12} />}
+              <span>
+                {micPermissionState === "insecure"
+                  ? "Mobile requires HTTPS for Mic"
+                  : "Microphone access needed"}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                if (micPermissionState === "insecure") {
+                  setShowPermissionModal(true);
+                } else {
+                  requestMicPermission();
+                }
+              }}
+              style={{
+                background:
+                  micPermissionState === "insecure"
+                    ? "rgba(245, 158, 11, 0.25)"
+                    : "rgba(0, 245, 212, 0.2)",
+                border:
+                  micPermissionState === "insecure"
+                    ? "1px solid rgba(245, 158, 11, 0.5)"
+                    : "1px solid rgba(0, 245, 212, 0.5)",
+                color: micPermissionState === "insecure" ? "#fef3c7" : "#00f5d4",
+                borderRadius: "5px",
+                padding: "2px 8px",
+                fontSize: "10.5px",
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              {micPermissionState === "insecure" ? "How to Enable" : "Allow Mic"}
             </button>
           </div>
         )}
@@ -3774,22 +4138,26 @@ export default function RAGPanel({
                 type="button"
                 onClick={toggleVoiceTyping}
                 style={{
-                  width: "28px",
-                  height: "28px",
+                  width: isMobile ? "34px" : "28px",
+                  height: isMobile ? "34px" : "28px",
                   borderRadius: "50%",
                   border: isVoiceTyping
                     ? "1.5px solid #00f5d4"
-                    : "1px solid transparent",
+                    : micPermissionState === "denied" || micPermissionState === "insecure"
+                    ? "1.5px solid rgba(239, 68, 68, 0.5)"
+                    : "1.5px solid rgba(0, 245, 212, 0.4)",
                   background: isVoiceTyping
                     ? "radial-gradient(circle at 35% 35%, #00f5d4, #0d9488)"
                     : listeningMode
                     ? "rgba(0, 245, 212, 0.2)"
-                    : "transparent",
+                    : "rgba(0, 245, 212, 0.08)",
                   color: isVoiceTyping
                     ? "#020406"
                     : listeningMode
                     ? "#00f5d4"
-                    : "#94a3b8",
+                    : micPermissionState === "denied"
+                    ? "#f87171"
+                    : "#5eead4",
                   cursor: "pointer",
                   display: "flex",
                   alignItems: "center",
@@ -3798,7 +4166,7 @@ export default function RAGPanel({
                   transition: "all 0.2s cubic-bezier(0.16, 1, 0.3, 1)",
                   boxShadow: isVoiceTyping
                     ? "0 0 16px rgba(0, 245, 212, 0.85), 0 0 30px rgba(0, 245, 212, 0.4)"
-                    : "none",
+                    : "0 0 8px rgba(0, 245, 212, 0.15)",
                   transform: isVoiceTyping ? "scale(1.08)" : "scale(1)",
                 }}
                 title={
@@ -3810,9 +4178,9 @@ export default function RAGPanel({
                 }
               >
                 {isVoiceTyping ? (
-                  <MicOff size={13} strokeWidth={2.4} />
+                  <MicOff size={isMobile ? 16 : 13} strokeWidth={2.4} />
                 ) : (
-                  <Mic size={13} />
+                  <Mic size={isMobile ? 16 : 13} />
                 )}
               </button>
             </div>
@@ -3888,6 +4256,251 @@ export default function RAGPanel({
           onConfirm={confirmModal.onConfirm}
           onCancel={confirmModal.onCancel}
         />
+      )}
+
+      {/* ── Microphone Permission & Insecure Context Helper Modal ── */}
+      {showPermissionModal && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 100,
+            background: "rgba(1, 4, 7, 0.88)",
+            backdropFilter: "blur(8px)",
+            WebkitBackdropFilter: "blur(8px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "16px",
+            animation: "fadeIn 0.2s ease-out",
+          }}
+        >
+          <div
+            style={{
+              width: "100%",
+              maxWidth: "380px",
+              background: "rgba(2, 10, 16, 0.98)",
+              border: "1.5px solid rgba(0, 245, 212, 0.4)",
+              borderRadius: "16px",
+              boxShadow: "0 12px 40px rgba(0, 0, 0, 0.9), 0 0 25px rgba(0, 245, 212, 0.15)",
+              padding: "18px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "12px",
+            }}
+          >
+            {/* Modal Header */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                {micPermissionState === "insecure" ? (
+                  <Lock size={18} color="#fbbf24" />
+                ) : (
+                  <Mic size={18} color="#00f5d4" />
+                )}
+                <span style={{ fontSize: "14px", fontWeight: 700, color: "#f1f5f9" }}>
+                  {micPermissionState === "insecure"
+                    ? "Mobile HTTPS Connection Required"
+                    : micPermissionState === "denied"
+                    ? "Microphone Access Denied"
+                    : "Allow Microphone Access"}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPermissionModal(false)}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "#94a3b8",
+                  cursor: "pointer",
+                  padding: "4px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            {micPermissionState === "insecure" ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                <p style={{ fontSize: "12px", color: "#cbd5e1", lineHeight: 1.5, margin: 0 }}>
+                  Mobile browsers (Chrome on Android & Safari on iOS) automatically block microphone access on plain HTTP (<code>http://192.168...</code>) for security.
+                </p>
+
+                {/* Option 1: Run HTTPS */}
+                <div
+                  style={{
+                    background: "rgba(0, 245, 212, 0.08)",
+                    border: "1px solid rgba(0, 245, 212, 0.25)",
+                    borderRadius: "10px",
+                    padding: "10px 12px",
+                  }}
+                >
+                  <div style={{ fontWeight: 700, color: "#5eead4", fontSize: "12px", marginBottom: "4px" }}>
+                    Option 1 (Recommended): Run with HTTPS
+                  </div>
+                  <p style={{ fontSize: "11px", color: "#94a3b8", margin: "0 0 6px 0", lineHeight: 1.4 }}>
+                    Start the Next.js dev server with HTTPS by running:
+                  </p>
+                  <code
+                    style={{
+                      display: "block",
+                      background: "rgba(0, 0, 0, 0.5)",
+                      padding: "4px 8px",
+                      borderRadius: "5px",
+                      fontSize: "11px",
+                      color: "#00f5d4",
+                      fontFamily: "var(--font-mono)",
+                    }}
+                  >
+                    npm run dev:https
+                  </code>
+                  <p style={{ fontSize: "10.5px", color: "#64748b", margin: "6px 0 0 0" }}>
+                    Then reload with <strong style={{ color: "#5eead4" }}>https://</strong> on your phone.
+                  </p>
+                </div>
+
+                {/* Option 2: Chrome Android Flag */}
+                <div
+                  style={{
+                    background: "rgba(255, 255, 255, 0.04)",
+                    border: "1px solid rgba(255, 255, 255, 0.1)",
+                    borderRadius: "10px",
+                    padding: "10px 12px",
+                  }}
+                >
+                  <div style={{ fontWeight: 700, color: "#e2e8f0", fontSize: "12px", marginBottom: "4px" }}>
+                    Option 2: Chrome Android Flag
+                  </div>
+                  <p style={{ fontSize: "11px", color: "#94a3b8", margin: "0 0 6px 0", lineHeight: 1.4 }}>
+                    In Chrome on your phone, open <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code>, enable it, and add this origin:
+                  </p>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <input
+                      readOnly
+                      value={typeof window !== "undefined" ? window.location.origin : "http://192.168.29.146:3000"}
+                      style={{
+                        flex: 1,
+                        background: "rgba(0, 0, 0, 0.4)",
+                        border: "1px solid rgba(255, 255, 255, 0.15)",
+                        borderRadius: "6px",
+                        padding: "5px 8px",
+                        fontSize: "11px",
+                        color: "#5eead4",
+                        fontFamily: "var(--font-mono)",
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (typeof navigator !== "undefined" && navigator.clipboard) {
+                          navigator.clipboard.writeText(window.location.origin);
+                          setCopiedFlagUrl(true);
+                          setTimeout(() => setCopiedFlagUrl(false), 2000);
+                        }
+                      }}
+                      style={{
+                        padding: "5px 10px",
+                        borderRadius: "6px",
+                        background: "#00f5d4",
+                        color: "#020406",
+                        fontWeight: 700,
+                        fontSize: "11px",
+                        border: "none",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "4px",
+                        flexShrink: 0,
+                      }}
+                    >
+                      {copiedFlagUrl ? <Check size={12} /> : <Copy size={12} />}
+                      <span>{copiedFlagUrl ? "Copied" : "Copy"}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : micPermissionState === "denied" ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                <p style={{ fontSize: "12px", color: "#cbd5e1", lineHeight: 1.5, margin: 0 }}>
+                  Microphone permission is blocked in your browser site settings for this address.
+                </p>
+                <div
+                  style={{
+                    background: "rgba(239, 68, 68, 0.1)",
+                    border: "1px solid rgba(239, 68, 68, 0.25)",
+                    borderRadius: "10px",
+                    padding: "10px 12px",
+                  }}
+                >
+                  <div style={{ fontWeight: 700, color: "#fca5a5", fontSize: "12px", marginBottom: "4px" }}>
+                    How to enable on mobile:
+                  </div>
+                  <ol style={{ fontSize: "11.5px", color: "#cbd5e1", paddingLeft: "18px", margin: "4px 0", lineHeight: 1.6 }}>
+                    <li>Tap the <strong>tune/lock icon (⚙️ or 🔒)</strong> in the top address bar.</li>
+                    <li>Tap <strong>Permissions</strong> (or <strong>Site settings</strong>).</li>
+                    <li>Tap <strong>Microphone</strong> and choose <strong>Allow</strong>.</li>
+                    <li>Tap the button below to re-activate.</li>
+                  </ol>
+                </div>
+                <button
+                  type="button"
+                  onClick={requestMicPermission}
+                  style={{
+                    width: "100%",
+                    padding: "10px",
+                    borderRadius: "8px",
+                    background: "linear-gradient(135deg, #00f5d4, #0d9488)",
+                    color: "#020406",
+                    fontWeight: 700,
+                    fontSize: "12.5px",
+                    border: "none",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "6px",
+                    marginTop: "4px",
+                  }}
+                >
+                  <Mic size={15} />
+                  <span>Request Microphone Permission Again</span>
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                <p style={{ fontSize: "12.5px", color: "#cbd5e1", lineHeight: 1.5, margin: 0 }}>
+                  RIFT needs microphone access to let you ask questions with your voice and speak naturally with your documents.
+                </p>
+                <button
+                  type="button"
+                  onClick={requestMicPermission}
+                  style={{
+                    width: "100%",
+                    padding: "10px",
+                    borderRadius: "8px",
+                    background: "linear-gradient(135deg, #00f5d4, #0d9488)",
+                    color: "#020406",
+                    fontWeight: 700,
+                    fontSize: "13px",
+                    border: "none",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "6px",
+                  }}
+                >
+                  <Mic size={15} />
+                  <span>Allow Microphone Access</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
       )}
 </div>              
   );
