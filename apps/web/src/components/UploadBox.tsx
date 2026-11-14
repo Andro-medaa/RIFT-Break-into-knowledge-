@@ -143,9 +143,9 @@ export default function UploadBox({ isMobile = false }: { isMobile?: boolean } =
         gridTemplateColumns: "1fr auto",
         alignItems: "stretch",
         gap: "0",
-        width: "74%",
+        width: isMobile ? "100%" : "74%",
         maxWidth: "760px",
-        minWidth: "340px",
+        minWidth: isMobile ? "0px" : "340px",
         borderRadius: "26px",
         border: isDragOver
           ? "1.5px solid #00f5d4"

@@ -40,7 +40,9 @@ export default function MainContent({ isMobile = false }: { isMobile?: boolean }
         alignItems: "center",
         justifyContent: "center",
         position: "relative",
-        overflow: "hidden",
+        overflowY: isMobile ? "auto" : "hidden",
+        overflowX: "hidden",
+        padding: isMobile ? "20px 6px" : "0",
         boxShadow: "0 16px 50px rgba(0, 0, 0, 0.75)",
         contain: "layout paint",
       }}

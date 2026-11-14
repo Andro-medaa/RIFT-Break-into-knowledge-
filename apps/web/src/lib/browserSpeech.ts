@@ -262,6 +262,7 @@ export function cancelAllBrowserSpeech(): void {
 export class BrowserSpeechController {
   private sessionId = 0;
   private activeUtterance: SpeechSynthesisUtterance | null = null;
+  private startSpeechTimer: ReturnType<typeof setTimeout> | null = null;
   private graceTimer: ReturnType<typeof setTimeout> | null = null;
   private stepTimer: ReturnType<typeof setTimeout> | null = null;
   private chunkTransitionTimer: ReturnType<typeof setTimeout> | null = null;
@@ -274,6 +275,10 @@ export class BrowserSpeechController {
   private nativeBoundaryConfirmed = false;
 
   private clearTimers() {
+    if (this.startSpeechTimer) {
+      clearTimeout(this.startSpeechTimer);
+      this.startSpeechTimer = null;
+    }
     if (this.graceTimer) {
       clearTimeout(this.graceTimer);
       this.graceTimer = null;
@@ -571,7 +576,13 @@ export class BrowserSpeechController {
       window.speechSynthesis.speak(utterance);
     };
 
-    speakChunk(0);
+    // Small 50ms tick ensures Chromium/WebKit IPC cancels any prior speech pipeline
+    // before the new utterance is queued, preventing silent cancellation of the new speech.
+    this.startSpeechTimer = setTimeout(() => {
+      if (currentSession === this.sessionId) {
+        speakChunk(0);
+      }
+    }, 50);
   }
 }
 

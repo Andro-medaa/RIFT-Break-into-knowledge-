@@ -14,6 +14,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   Play,
   Pause,
@@ -196,6 +197,7 @@ export default function TranscriptPanel({
     setScriptInstruction,
   } = useWorkspace();
 
+  const isPlaying = playbackState === "playing";
   const voiceEngineRef = useRef(voiceEngine);
   useEffect(() => {
     voiceEngineRef.current = voiceEngine;
@@ -297,6 +299,40 @@ export default function TranscriptPanel({
   const [browserWordIdx, setBrowserWordIdx] = useState<number>(-1);
   const [isAudioLoading, setIsAudioLoading] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const tickerContainerRef = useRef<HTMLDivElement>(null);
+
+  // Portal target for mobile vertical playback controls
+  const [playbackPortalNode, setPlaybackPortalNode] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    if (typeof document !== "undefined") {
+      const el = document.getElementById("rift-mobile-vertical-playback");
+      if (el) setPlaybackPortalNode(el);
+    }
+  }, []);
+
+  // Auto-scroll horizontal ticker on mobile: reset to start on line/segment advance
+  useEffect(() => {
+    if (tickerContainerRef.current) {
+      tickerContainerRef.current.scrollTo({ left: 0, behavior: "smooth" });
+    }
+  }, [activeSegIdx]);
+
+  // Auto-slide ticker to the left as words are dictated to keep current & surrounding context in view
+  useEffect(() => {
+    const container = tickerContainerRef.current;
+    if (!container || !isPlaying) return;
+
+    const activeWordEl = container.querySelector(
+      '[data-active-word="true"]'
+    ) as HTMLElement | null;
+    if (activeWordEl) {
+      const containerWidth = container.clientWidth;
+      const wordLeft = activeWordEl.offsetLeft;
+      // Scroll so active word stays around 35% from the left edge
+      const targetScrollLeft = Math.max(0, wordLeft - containerWidth * 0.35);
+      container.scrollTo({ left: targetScrollLeft, behavior: "smooth" });
+    }
+  }, [currentAudioTime, browserWordIdx, isPlaying]);
 
   const getBrowserSpeech = useCallback(() => {
     if (!browserSpeechRef.current) {
@@ -434,6 +470,16 @@ export default function TranscriptPanel({
   useEffect(() => {
     if (!activeParagraphId || displayItems.length === 0) return;
 
+    // Check if the current segment already matches activeParagraphId
+    const currentItem = displayItems[activeSegIdx];
+    if (
+      currentItem &&
+      (currentItem.id === activeParagraphId ||
+        currentItem.chunkId === activeParagraphId)
+    ) {
+      return;
+    }
+
     // Resolve the chunk_id from activeParagraphId if it's a segment id
     let resolvedId = activeParagraphId;
     if (activeParagraphId.startsWith("seg_")) {
@@ -444,12 +490,19 @@ export default function TranscriptPanel({
       }
     }
 
+    if (
+      currentItem &&
+      (currentItem.id === resolvedId || currentItem.chunkId === resolvedId)
+    ) {
+      return;
+    }
+
     const foundIdx = displayItems.findIndex(
       (item) =>
-        item.chunkId === activeParagraphId ||
         item.id === activeParagraphId ||
-        item.chunkId === resolvedId ||
-        item.id === resolvedId
+        item.chunkId === activeParagraphId ||
+        item.id === resolvedId ||
+        item.chunkId === resolvedId
     );
     if (foundIdx >= 0 && foundIdx !== activeSegIdx) {
       setActiveSegIdx(foundIdx);
@@ -621,7 +674,7 @@ export default function TranscriptPanel({
       const currentSession = ++playbackSessionRef.current;
       isRepeatingSingleRef.current = repeatSingle;
       setActiveSegIdx(segIndex);
-      const targetId = item.chunkId || item.id;
+      const targetId = item.id || item.chunkId;
       setActiveParagraph(targetId);
       navigateToParagraph(targetId, item.bbox);
 
@@ -786,7 +839,9 @@ export default function TranscriptPanel({
   const togglePlayback = useCallback(() => {
     if (playbackState === "playing") {
       if (audioRef.current) {
-        try { audioRef.current.pause(); } catch {}
+        try {
+          audioRef.current.pause();
+        } catch {}
       }
       browserSpeechRef.current?.pause();
       setPlaybackState("paused");
@@ -794,10 +849,13 @@ export default function TranscriptPanel({
       if (voiceEngine === "ai") {
         browserSpeechRef.current?.stop();
         cancelAllBrowserSpeech();
-        if (audioRef.current && audioRef.current.src) {
-          audioRef.current.play().then(() => setPlaybackState("playing")).catch(() => {
-            playSegmentAudio(activeSegIdx);
-          });
+        if (audioRef.current && audioRef.current.src && !audioRef.current.ended) {
+          audioRef.current
+            .play()
+            .then(() => setPlaybackState("playing"))
+            .catch(() => {
+              playSegmentAudio(activeSegIdx);
+            });
         } else {
           playSegmentAudio(activeSegIdx);
         }
@@ -808,14 +866,36 @@ export default function TranscriptPanel({
             audioRef.current.currentTime = 0;
           } catch {}
         }
-        browserSpeechRef.current?.resume();
-        setPlaybackState("playing");
+        // Hard-cancel any frozen browser speech stream from pause()
+        browserSpeechRef.current?.stop();
+        cancelAllBrowserSpeech();
+        // Start fresh speech synthesis from the active word to avoid Chromium silent resume bug
+        const currentItem = displayItems[activeSegIdx];
+        if (currentItem) {
+          const startWord = Math.max(0, browserWordIdx >= 0 ? browserWordIdx : 0);
+          playBrowserSpeech(
+            convertMathToSpokenText(currentItem.text),
+            activeSegIdx,
+            startWord
+          );
+        } else {
+          playSegmentAudio(activeSegIdx);
+        }
       }
     } else {
       isRepeatingSingleRef.current = false;
       playSegmentAudio(activeSegIdx, false);
     }
-  }, [playbackState, activeSegIdx, voiceEngine, playSegmentAudio, setPlaybackState]);
+  }, [
+    playbackState,
+    activeSegIdx,
+    voiceEngine,
+    browserWordIdx,
+    displayItems,
+    playBrowserSpeech,
+    playSegmentAudio,
+    setPlaybackState,
+  ]);
 
   const stopPlayback = useCallback(() => {
     playbackSessionRef.current += 1;
@@ -848,8 +928,9 @@ export default function TranscriptPanel({
       const prevIdx = activeSegIdx - 1;
       setActiveSegIdx(prevIdx);
       const item = displayItems[prevIdx];
-      if (item?.chunkId) {
-        navigateToParagraph(item.chunkId, item.bbox);
+      const targetId = item?.chunkId || item?.id;
+      if (targetId) {
+        navigateToParagraph(targetId, item.bbox);
       }
       if (playbackState === "playing") {
         playSegmentAudio(prevIdx, false);
@@ -862,8 +943,9 @@ export default function TranscriptPanel({
       const nextIdx = activeSegIdx + 1;
       setActiveSegIdx(nextIdx);
       const item = displayItems[nextIdx];
-      if (item?.chunkId) {
-        navigateToParagraph(item.chunkId, item.bbox);
+      const targetId = item?.chunkId || item?.id;
+      if (targetId) {
+        navigateToParagraph(targetId, item.bbox);
       }
       if (playbackState === "playing") {
         playSegmentAudio(nextIdx, false);
@@ -1020,8 +1102,6 @@ export default function TranscriptPanel({
     })();
   }, [selectedVoiceId, voiceEngine, playbackState, activeSegIdx, displayItems, selectedSpeed, setPlaybackState]);
 
-  const isPlaying = playbackState === "playing";
-
   if (isMobile && !isExpanded) {
     const activeItem = displayItems[activeSegIdx];
     return (
@@ -1044,15 +1124,15 @@ export default function TranscriptPanel({
           flexShrink: 0,
         }}
       >
-        {/* Top Draggable Border Handle */}
+        {/* Top Draggable Border Handle (Sole Expand Trigger) */}
         <div
           onClick={onToggleMobileExpand}
           style={{
             width: "100%",
             display: "flex",
             justifyContent: "center",
-            paddingTop: "4px",
-            paddingBottom: "2px",
+            paddingTop: "6px",
+            paddingBottom: "4px",
             cursor: "pointer",
             flexShrink: 0,
           }}
@@ -1060,153 +1140,212 @@ export default function TranscriptPanel({
         >
           <div
             style={{
-              width: "36px",
-              height: "3px",
+              width: "38px",
+              height: "4px",
               borderRadius: "999px",
-              background: "rgba(0, 245, 212, 0.45)",
-              boxShadow: "0 0 6px rgba(0, 245, 212, 0.3)",
+              background: "rgba(0, 245, 212, 0.55)",
+              boxShadow: "0 0 8px rgba(0, 245, 212, 0.4)",
             }}
           />
         </div>
 
-        {/* Content Row: Controls Trio (Backward, Play/Pause in Middle, Forward) + Page Tag + Karaoke Text */}
+        {/* ── Vertical Playback Controls (Portaled directly above the Chat FAB on Mobile) ── */}
+        {(() => {
+          const target =
+            playbackPortalNode ||
+            (typeof document !== "undefined"
+              ? document.getElementById("rift-mobile-vertical-playback")
+              : null);
+          if (!isMobile || isExpanded || !target) return null;
+
+          return createPortal(
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: "5px",
+                padding: "6px 5px",
+                borderRadius: "22px",
+                background: "rgba(3, 12, 18, 0.94)",
+                backdropFilter: "blur(16px)",
+                WebkitBackdropFilter: "blur(16px)",
+                border: "1px solid rgba(0, 245, 212, 0.3)",
+                boxShadow:
+                  "0 8px 24px rgba(0, 0, 0, 0.85), 0 0 14px rgba(0, 245, 212, 0.15)",
+                pointerEvents: "auto",
+              }}
+            >
+              {/* Prev Button (Up) */}
+              <button
+                type="button"
+                onClick={playPrevSegment}
+                disabled={activeSegIdx <= 0}
+                style={{
+                  width: "30px",
+                  height: "30px",
+                  borderRadius: "50%",
+                  background: "rgba(255, 255, 255, 0.08)",
+                  border: "1px solid rgba(0, 245, 212, 0.25)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  cursor: activeSegIdx <= 0 ? "default" : "pointer",
+                  color: activeSegIdx <= 0 ? "#475569" : "#00f5d4",
+                  opacity: activeSegIdx <= 0 ? 0.4 : 1,
+                  padding: 0,
+                  transition: "all 0.15s ease",
+                }}
+                title="Previous paragraph (Up)"
+              >
+                <ChevronUp size={16} />
+              </button>
+
+              {/* Play / Pause in Middle */}
+              <button
+                type="button"
+                onClick={togglePlayback}
+                disabled={isAudioLoading || displayItems.length === 0}
+                style={{
+                  width: "36px",
+                  height: "36px",
+                  borderRadius: "50%",
+                  background: isPlaying
+                    ? "linear-gradient(135deg, #00f5d4, #0d9488)"
+                    : "rgba(255, 255, 255, 0.12)",
+                  border: `1.5px solid ${
+                    isPlaying ? "#00f5d4" : "rgba(0, 245, 212, 0.5)"
+                  }`,
+                  boxShadow: isPlaying
+                    ? "0 0 14px rgba(0, 245, 212, 0.65)"
+                    : "none",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  cursor: "pointer",
+                  color: isPlaying ? "#020406" : "#00f5d4",
+                  padding: 0,
+                  transition: "all 0.15s ease",
+                }}
+                title={isPlaying ? "Pause dictation" : "Play dictation"}
+              >
+                {isAudioLoading ? (
+                  <Loader2 size={16} className="animate-spin text-teal-400" />
+                ) : isPlaying ? (
+                  <Pause size={16} fill="#020406" />
+                ) : (
+                  <Play
+                    size={16}
+                    fill="#00f5d4"
+                    style={{ marginLeft: "2px" }}
+                  />
+                )}
+              </button>
+
+              {/* Next Button (Down) */}
+              <button
+                type="button"
+                onClick={playNextSegment}
+                disabled={activeSegIdx >= displayItems.length - 1}
+                style={{
+                  width: "30px",
+                  height: "30px",
+                  borderRadius: "50%",
+                  background: "rgba(255, 255, 255, 0.08)",
+                  border: "1px solid rgba(0, 245, 212, 0.25)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  cursor:
+                    activeSegIdx >= displayItems.length - 1
+                      ? "default"
+                      : "pointer",
+                  color:
+                    activeSegIdx >= displayItems.length - 1
+                      ? "#475569"
+                      : "#00f5d4",
+                  opacity:
+                    activeSegIdx >= displayItems.length - 1 ? 0.4 : 1,
+                  padding: 0,
+                  transition: "all 0.15s ease",
+                }}
+                title="Next paragraph (Down)"
+              >
+                <ChevronDown size={16} />
+              </button>
+            </div>,
+            target
+          );
+        })()}
+
+        {/* Content Row: Page Tag + Horizontal Auto-sliding Ticker Ribbon */}
         <div
           style={{
             display: "flex",
             alignItems: "center",
-            gap: "6px",
-            padding: "0 8px 4px 8px",
+            gap: "8px",
+            padding: "0 12px 6px 12px",
             flex: 1,
             minWidth: 0,
             overflow: "hidden",
           }}
         >
-          {/* Controls Trio: Backward, Play/Pause in Middle, Forward */}
-          <div style={{ display: "flex", alignItems: "center", gap: "3px", flexShrink: 0 }}>
-            {/* Backward */}
-            <button
-              type="button"
-              onClick={playPrevSegment}
-              disabled={activeSegIdx <= 0}
-              style={{
-                width: "24px",
-                height: "24px",
-                borderRadius: "6px",
-                background: "rgba(255, 255, 255, 0.06)",
-                border: "1px solid rgba(0, 245, 212, 0.25)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                cursor: activeSegIdx <= 0 ? "default" : "pointer",
-                color: activeSegIdx <= 0 ? "#475569" : "#00f5d4",
-                opacity: activeSegIdx <= 0 ? 0.4 : 1,
-                padding: 0,
-              }}
-              title="Previous segment"
-            >
-              <ChevronLeft size={13} />
-            </button>
-
-            {/* Play/Pause in Middle */}
-            <button
-              type="button"
-              onClick={togglePlayback}
-              disabled={isAudioLoading || displayItems.length === 0}
-              style={{
-                width: "26px",
-                height: "26px",
-                borderRadius: "7px",
-                background: isPlaying
-                  ? "linear-gradient(135deg, #00f5d4, #0d9488)"
-                  : "rgba(255, 255, 255, 0.1)",
-                border: `1px solid ${isPlaying ? "#00f5d4" : "rgba(0, 245, 212, 0.4)"}`,
-                boxShadow: isPlaying ? "0 0 10px rgba(0, 245, 212, 0.5)" : "none",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                cursor: "pointer",
-                color: isPlaying ? "#020406" : "#fff",
-                padding: 0,
-              }}
-              title={isPlaying ? "Pause dictation" : "Play dictation"}
-            >
-              {isAudioLoading ? (
-                <Loader2 size={12} className="animate-spin text-teal-400" />
-              ) : isPlaying ? (
-                <Pause size={12} fill="#020406" />
-              ) : (
-                <Play size={12} fill="#fff" style={{ marginLeft: "1px" }} />
-              )}
-            </button>
-
-            {/* Forward */}
-            <button
-              type="button"
-              onClick={playNextSegment}
-              disabled={activeSegIdx >= displayItems.length - 1}
-              style={{
-                width: "24px",
-                height: "24px",
-                borderRadius: "6px",
-                background: "rgba(255, 255, 255, 0.06)",
-                border: "1px solid rgba(0, 245, 212, 0.25)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                cursor: activeSegIdx >= displayItems.length - 1 ? "default" : "pointer",
-                color: activeSegIdx >= displayItems.length - 1 ? "#475569" : "#00f5d4",
-                opacity: activeSegIdx >= displayItems.length - 1 ? 0.4 : 1,
-                padding: 0,
-              }}
-              title="Next segment"
-            >
-              <ChevronRight size={13} />
-            </button>
-          </div>
-
           {/* Page Tag */}
           <span
             style={{
-              fontSize: "9px",
+              fontSize: "9.5px",
               fontFamily: "var(--font-mono)",
+              fontWeight: 700,
               color: "#5eead4",
-              background: "rgba(0, 245, 212, 0.1)",
-              padding: "2px 5px",
-              borderRadius: "4px",
-              border: "1px solid rgba(0, 245, 212, 0.25)",
+              background: "rgba(0, 245, 212, 0.12)",
+              padding: "2px 6px",
+              borderRadius: "5px",
+              border: "1px solid rgba(0, 245, 212, 0.3)",
               flexShrink: 0,
             }}
           >
             p.{activeItem?.bbox?.page || 1}
           </span>
 
-          {/* Karaoke text snippet */}
+          {/* Auto-sliding Horizontal Teleprompter Ribbon (Purely for reading, does not expand drawer) */}
           <div
-            onClick={onToggleMobileExpand}
+            ref={tickerContainerRef}
+            className="rift-mobile-ticker"
             style={{
               flex: 1,
               minWidth: 0,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
+              overflowX: "hidden",
+              overflowY: "hidden",
               whiteSpace: "nowrap",
-              fontSize: "11.5px",
+              fontSize: "12px",
               color: "#e2e8f0",
-              cursor: "pointer",
               lineHeight: "1.4",
+              position: "relative",
             }}
-            title="Tap or drag up to expand"
+            title="Current dictation line (auto-slides to follow speech)"
           >
             {activeItem ? (
               <WordKaraokeText
+                key={
+                  activeItem
+                    ? activeItem.chunkId || activeItem.id || activeSegIdx
+                    : "empty"
+                }
                 text={activeItem.text}
                 enableMarkdown={true}
-                wordsTimeline={timelineSegIdx === activeSegIdx ? activeTimeline : undefined}
+                wordsTimeline={
+                  timelineSegIdx === activeSegIdx ? activeTimeline : undefined
+                }
                 currentTime={currentAudioTime}
-                browserWords={timelineSegIdx === activeSegIdx ? browserWords : undefined}
-                activeWordIndex={timelineSegIdx === activeSegIdx ? browserWordIdx : -1}
+                browserWords={
+                  timelineSegIdx === activeSegIdx ? browserWords : undefined
+                }
+                activeWordIndex={
+                  timelineSegIdx === activeSegIdx ? browserWordIdx : -1
+                }
                 isActive={true}
                 isPlaying={isPlaying}
-                fontSize="11.5px"
+                fontSize="12px"
                 lineHeight="1.4"
                 onSeekTime={seekToWordTime}
               />
@@ -1214,26 +1353,6 @@ export default function TranscriptPanel({
               <span style={{ color: "#64748b" }}>Transcript ready</span>
             )}
           </div>
-
-          {/* Small chevron up to hint expandable drawer */}
-          <button
-            type="button"
-            onClick={onToggleMobileExpand}
-            style={{
-              background: "none",
-              border: "none",
-              color: "#00f5d4",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              cursor: "pointer",
-              padding: "2px",
-              flexShrink: 0,
-            }}
-            title="Expand transcript drawer"
-          >
-            <ChevronUp size={14} />
-          </button>
         </div>
       </div>
     );
@@ -2004,7 +2123,7 @@ export default function TranscriptPanel({
                 id={`transcript-seg-${i}`}
                 onClick={() => {
                   setActiveSegIdx(i);
-                  const targetId = item.chunkId || item.id;
+                  const targetId = item.id || item.chunkId;
                   setActiveParagraph(targetId);
                   navigateToParagraph(targetId, item.bbox);
                   isRepeatingSingleRef.current = false;
@@ -2116,7 +2235,7 @@ export default function TranscriptPanel({
                     onSeekTime={seekToWordTime}
                     onSeekWordIndex={(wordIdx) => {
                       setActiveSegIdx(i);
-                      const targetId = item.chunkId || item.id;
+                      const targetId = item.id || item.chunkId;
                       setActiveParagraph(targetId);
                       navigateToParagraph(targetId, item.bbox);
                       playBrowserSpeech(convertMathToSpokenText(item.text), i, wordIdx);

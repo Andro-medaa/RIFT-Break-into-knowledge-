@@ -54,8 +54,88 @@ export default function TopBarControls({ isMobile = false }: { isMobile?: boolea
         </div>
       )}
 
-      {/* ── Voice Engine Toggle: AI Emotional Voices vs Browser Built-in Voices (Desktop only; on mobile it lives in the expanded script drawer) ── */}
-      {!isMobile && (
+      {/* ── Voice Engine Toggle: Desktop dual-button vs Mobile minimal slide switch ── */}
+      {isMobile ? (
+        <button
+          type="button"
+          onClick={() => setVoiceEngine(voiceEngine === "ai" ? "browser" : "ai")}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "5px",
+            background: "rgba(3, 12, 18, 0.90)",
+            border: `1px solid ${
+              voiceEngine === "ai"
+                ? "rgba(0, 245, 212, 0.45)"
+                : "rgba(100, 116, 139, 0.3)"
+            }`,
+            borderRadius: "14px",
+            padding: "2px 6px 2px 7px",
+            cursor: "pointer",
+            transition: "all 0.2s ease",
+            boxShadow:
+              voiceEngine === "ai"
+                ? "0 0 10px rgba(0, 245, 212, 0.25)"
+                : "none",
+          }}
+          title={
+            voiceEngine === "ai"
+              ? "Voice Mode: AI (Tap to switch to Browser)"
+              : "Voice Mode: Browser (Tap to switch to AI)"
+          }
+        >
+          <span
+            style={{
+              fontSize: "10.5px",
+              fontFamily: "var(--font-mono)",
+              fontWeight: 700,
+              color: voiceEngine === "ai" ? "#00f5d4" : "#94a3b8",
+              letterSpacing: "0.02em",
+              userSelect: "none",
+            }}
+          >
+            {voiceEngine === "ai" ? "AI Voice" : "Native"}
+          </span>
+
+          {/* Micro Sliding Pill Switch */}
+          <div
+            style={{
+              width: "28px",
+              height: "14px",
+              borderRadius: "7px",
+              background:
+                voiceEngine === "ai"
+                  ? "linear-gradient(90deg, rgba(13, 148, 136, 0.8), rgba(0, 245, 212, 0.95))"
+                  : "rgba(30, 41, 59, 0.8)",
+              border: `1px solid ${
+                voiceEngine === "ai"
+                  ? "rgba(0, 245, 212, 0.6)"
+                  : "rgba(100, 116, 139, 0.4)"
+              }`,
+              position: "relative",
+              transition: "all 0.22s cubic-bezier(0.16, 1, 0.3, 1)",
+              boxShadow:
+                voiceEngine === "ai"
+                  ? "0 0 8px rgba(0, 245, 212, 0.4)"
+                  : "none",
+            }}
+          >
+            <div
+              style={{
+                position: "absolute",
+                top: "1px",
+                left: voiceEngine === "ai" ? "15px" : "1px",
+                width: "10px",
+                height: "10px",
+                borderRadius: "50%",
+                background: voiceEngine === "ai" ? "#020406" : "#64748b",
+                boxShadow: voiceEngine === "ai" ? "0 0 4px #00f5d4" : "none",
+                transition: "all 0.22s cubic-bezier(0.16, 1, 0.3, 1)",
+              }}
+            />
+          </div>
+        </button>
+      ) : (
         <div
           style={{
             display: "flex",
