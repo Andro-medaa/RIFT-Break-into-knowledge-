@@ -4,6 +4,7 @@ import React, { useMemo } from "react";
 import katex from "katex";
 import {
   isSafeMarkdownHref,
+  mathExprToSpeech,
   parseMarkdownBlocks,
   splitTextWithWhitespace,
   type MarkdownBlockNode,
@@ -65,7 +66,13 @@ type IndexedInline =
   | { type: "code"; pieces: IndexedPiece[] }
   | { type: "link"; pieces: IndexedPiece[]; href: string }
   | { type: "citation"; numbers: number[]; raw: string; revealAfterWordIdx: number }
-  | { type: "math"; value: string; display: boolean; revealAfterWordIdx: number }
+  | {
+      type: "math";
+      value: string;
+      display: boolean;
+      revealAfterWordIdx: number;
+      visualWordIndices: number[];
+    }
   | { type: "sub"; children: IndexedInline[] }
   | { type: "sup"; children: IndexedInline[] }
   | { type: "audio_cue"; cue: string; revealAfterWordIdx: number };
@@ -145,11 +152,22 @@ function indexInlines(
       };
     }
     if (node.type === "math") {
+      const wordsSource = node.spokenText || mathExprToSpeech(node.value);
+      const pieces = splitTextWithWhitespace(wordsSource).filter((p) => p.isWord);
+      const wordCount = Math.max(1, pieces.length);
+      const visualWordIndices: number[] = [];
+      for (let w = 0; w < wordCount; w++) {
+        visualWordIndices.push(counter.next++);
+      }
+      minWordIdx = Math.min(minWordIdx, visualWordIndices[0]);
       const revealAfterWordIdx = counter.next > 0 ? counter.next - 1 : -1;
-      // Count math as a single visual word for sync
-      counter.next++;
-      minWordIdx = Math.min(minWordIdx, counter.next - 1);
-      return { type: "math", value: node.value, display: node.display, revealAfterWordIdx };
+      return {
+        type: "math",
+        value: node.value,
+        display: node.display,
+        revealAfterWordIdx,
+        visualWordIndices,
+      };
     }
     if (node.type === "audio_cue") {
       const revealAfterWordIdx = counter.next > 0 ? counter.next - 1 : -1;
@@ -512,10 +530,80 @@ function renderIndexedInlines(
           throwOnError: false,
           output: "html",
         });
+
+        if (wordSync && node.visualWordIndices && node.visualWordIndices.length > 0) {
+          const speechIndices = node.visualWordIndices
+            .map((v) => wordSync.visualToSpeechIdx[v])
+            .filter((s) => s !== undefined && s >= 0);
+
+          const firstSpeechIdx = speechIndices[0] ?? -1;
+
+          if (
+            wordSync.revealMaxSpeechIndex !== undefined &&
+            firstSpeechIdx >= 0 &&
+            firstSpeechIdx > wordSync.revealMaxSpeechIndex
+          ) {
+            return null;
+          }
+
+          const isCurrent =
+            speechIndices.length > 0 &&
+            speechIndices.some((s) => s === wordSync.activeSpeechIndex);
+
+          const isPast =
+            speechIndices.length > 0 &&
+            speechIndices.every((s) => s < wordSync.pastBeforeSpeechIndex);
+
+          const canSeek = Boolean(wordSync.onSeekSpeechIndex && firstSpeechIdx >= 0);
+          const title =
+            firstSpeechIdx >= 0 && wordSync.speechTitles
+              ? wordSync.speechTitles[firstSpeechIdx]
+              : undefined;
+
+          const futureColor = wordSync.futureColor || "rgba(148, 163, 184, 0.68)";
+
+          return (
+            <span
+              key={key}
+              data-active-word={isCurrent ? "true" : undefined}
+              onClick={
+                canSeek
+                  ? (e) => {
+                      e.stopPropagation();
+                      wordSync.onSeekSpeechIndex?.(firstSpeechIdx);
+                    }
+                  : undefined
+              }
+              title={title}
+              style={{
+                display: node.display ? "block" : "inline-block",
+                textAlign: node.display ? "center" : undefined,
+                margin: node.display ? "8px 0" : "0 2px",
+                padding: "1px 5px",
+                borderRadius: "4px",
+                cursor: canSeek ? "pointer" : "default",
+                transition:
+                  "background-color 0.08s ease, color 0.08s ease, border-color 0.08s ease, transform 0.08s ease",
+                backgroundColor: isCurrent ? "rgba(0, 245, 212, 0.22)" : "transparent",
+                color: isCurrent ? "#00f5d4" : isPast ? baseTextColor : futureColor,
+                textShadow: isCurrent ? "0 0 12px rgba(0, 245, 212, 0.9)" : "none",
+                outline: isCurrent ? "1px solid rgba(0, 245, 212, 0.45)" : "none",
+                transform: isCurrent ? "scale(1.03)" : "scale(1)",
+                verticalAlign: node.display ? undefined : "middle",
+              }}
+              dangerouslySetInnerHTML={{ __html: html }}
+            />
+          );
+        }
+
         return (
           <span
             key={key}
-            style={node.display ? { display: "block", textAlign: "center", margin: "8px 0" } : { display: "inline" }}
+            style={
+              node.display
+                ? { display: "block", textAlign: "center", margin: "8px 0" }
+                : { display: "inline-block", margin: "0 2px", verticalAlign: "middle" }
+            }
             dangerouslySetInnerHTML={{ __html: html }}
           />
         );

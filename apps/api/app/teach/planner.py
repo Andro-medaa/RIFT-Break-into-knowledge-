@@ -168,7 +168,7 @@ def plan_lesson(
         )
 
         # Attempt with gemini-3.5-flash or gemini-2.0-flash / gemini-1.5-flash
-        model_name = "gemini-3.5-flash"
+        model_name = "gemini-3.8-flash"
         
         response = client.models.generate_content(
             model=model_name,

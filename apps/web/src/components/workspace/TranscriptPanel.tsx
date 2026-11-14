@@ -1013,7 +1013,7 @@ export default function TranscriptPanel() {
           }}
           title={
             scriptInstruction.trim()
-              ? `AI Script Guidance: "${scriptInstruction}" (Click to view or edit)`
+              ? `AI Script: "${scriptInstruction}" (Click to view or edit)`
               : "Generate or customize AI spoken script with Gemini Flash"
           }
         >
@@ -1023,21 +1023,6 @@ export default function TranscriptPanel() {
             <Sparkles size={11} color="#00f5d4" />
           )}
           <span>{isGeneratingScript ? "Writing…" : "AI Script"}</span>
-          {scriptInstruction.trim() && !isGeneratingScript && (
-            <span
-              style={{
-                fontSize: "8.5px",
-                background: "rgba(0, 245, 212, 0.25)",
-                color: "#00f5d4",
-                padding: "1px 4px",
-                borderRadius: "3px",
-                letterSpacing: "0.04em",
-                fontWeight: 700,
-              }}
-            >
-              GUIDED
-            </span>
-          )}
           <ChevronDown
             size={10}
             color="#94a3b8"

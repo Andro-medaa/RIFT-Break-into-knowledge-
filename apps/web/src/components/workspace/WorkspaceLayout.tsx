@@ -318,6 +318,9 @@ function TranscriptExtractor({ documentId }: { documentId?: string }) {
           // 4. Merge lines into semantic paragraphs
           const mergedParas: VisualLine[] = [];
           for (const line of lines) {
+            // Strip raw Unicode math decorator brackets (⏞, ⏟) that look like faces
+            line.text = line.text.replace(/[\u23de\u23df\u23dc\u23dd\u23b4\u23b5]/g, "");
+
             if (mergedParas.length === 0) {
               mergedParas.push({ ...line });
               continue;
@@ -329,12 +332,21 @@ function TranscriptExtractor({ documentId }: { documentId?: string }) {
             const currStartsCont = /^[a-z0-9—–•\-,;\]\)]/.test(line.text);
             const isHeading = prev.text.length < 80 && !prevEndsSentence && (gap > 8 || line.text.length > 80);
 
+            // Math equation horizontal term continuation (e.g. term1 + term2 + term3 on same equation line)
+            const isMathLine =
+              /[=+\-–·\(\)\[\]\{\}\\\/^_∑∫ϵλε\u0370-\u03ff]/.test(prev.text) ||
+              /[=+\-–·\(\)\[\]\{\}\\\/^_∑∫ϵλε\u0370-\u03ff]/.test(line.text) ||
+              /^[=+\-–·\*\/\.]/.test(line.text);
+            const sameBaseline = Math.abs(line.y0 - prev.y0) < 10;
+            const adjacentH = line.x0 >= prev.x0 - 10 && line.x0 - prev.x1 <= 55;
+
             const shouldMerge =
-              sameCol &&
-              gap >= -6 &&
-              gap < 14 &&
-              (!prevEndsSentence || currStartsCont) &&
-              !isHeading;
+              (sameCol &&
+                gap >= -6 &&
+                gap < 14 &&
+                (!prevEndsSentence || currStartsCont) &&
+                !isHeading) ||
+              (isMathLine && sameBaseline && adjacentH);
 
             if (shouldMerge) {
               prev.x0 = Math.min(prev.x0, line.x0);
@@ -351,7 +363,11 @@ function TranscriptExtractor({ documentId }: { documentId?: string }) {
           const keptParas: Array<{ text: string; box: PageBox }> = [];
           const obstacles: PageBox[] = [];
           for (const m of mergedParas) {
-            const cleanText = m.text.replace(/\s+/g, " ").trim();
+            const cleanText = m.text
+              .replace(/[\u23de\u23df\u23dc\u23dd\u23b4\u23b5]/g, "")
+              .replace(/\b([A-Za-z])(?:_)?(static|dynamic|total|ortho|jepa|mae|sim|loss|pred|target|init|corr|cov|var)\b/gi, "$1_$2")
+              .replace(/\s+/g, " ")
+              .trim();
             const box: PageBox = { x0: m.x0, y0: m.y0, x1: m.x1, y1: m.y1 };
             if (cleanText.length < 3) {
               obstacles.push(box);

@@ -226,15 +226,62 @@ def extract_page_text_blocks_with_bboxes(page: pymupdf.Page) -> list[tuple[int, 
 
     if not kept:
         return []
+
+    # Clean text and merge horizontally adjacent equation/formula blocks into single unified bboxes
+    cleaned_kept: list[tuple[int, str, pymupdf.Rect]] = []
+    for b_idx, txt, rect in kept:
+        # Strip raw Unicode math decorator brackets (⏞, ⏟) that look like weird faces
+        txt = re.sub(r'[\u23de\u23df\u23dc\u23dd\u23b4\u23b5]', '', txt)
+        # Expand common squashed PDF subscripts (e.g. Hstatic -> H_static, Hdynamic -> H_dynamic, zstatic -> z_static)
+        txt = re.sub(r'\b([A-Za-z])(?:_)?(static|dynamic|total|ortho|jepa|mae|sim|loss|pred|target|init|corr|cov|var)\b', r'\1_\2', txt)
+        txt = re.sub(r'\s*\n\s*', ' ', txt)
+        txt = re.sub(r'\s{2,}', ' ', txt).strip()
+        if not txt:
+            obstacles.append(rect)
+            continue
+        cleaned_kept.append((b_idx, txt, rect))
+
+    merged_kept: list[tuple[int, str, pymupdf.Rect]] = []
+    math_op_regex = r'[=+\-–·\(\)\[\]\{\}\\\/^_∑∫ϵλε\u0370-\u03ff]'
+    for b_idx, txt, rect in cleaned_kept:
+        if not merged_kept:
+            merged_kept.append((b_idx, txt, rect))
+            continue
+        prev_idx, prev_txt, prev_rect = merged_kept[-1]
+
+        # Check if prev and curr belong to the same equation / line:
+        y_overlap = min(prev_rect.y1, rect.y1) - max(prev_rect.y0, rect.y0)
+        min_h = max(1.0, min(prev_rect.height, rect.height))
+        same_y = (y_overlap / min_h) > 0.35 or abs(prev_rect.y0 - rect.y0) < 8.0
+
+        h_gap = rect.x0 - prev_rect.x1
+        adjacent_h = -6.0 <= h_gap <= 55.0
+
+        is_math = bool(re.search(math_op_regex, prev_txt) or re.search(math_op_regex, txt) or re.match(r'^[=+\-–·\*\/\.]', txt))
+
+        if same_y and adjacent_h and is_math:
+            merged_rect = pymupdf.Rect(
+                min(prev_rect.x0, rect.x0),
+                min(prev_rect.y0, rect.y0),
+                max(prev_rect.x1, rect.x1),
+                max(prev_rect.y1, rect.y1),
+            )
+            merged_kept[-1] = (prev_idx, f"{prev_txt} {txt}".strip(), merged_rect)
+        else:
+            merged_kept.append((b_idx, txt, rect))
+
+    if not merged_kept:
+        return []
+
     bboxes = normalize_context_aware_rects(
-        [r for _, _, r in kept],
+        [r for _, _, r in merged_kept],
         pw,
         ph,
         px0,
         py0,
         obstacle_rects=obstacles,
     )
-    return [(b_idx, txt, bbox) for (b_idx, txt, _), bbox in zip(kept, bboxes)]
+    return [(b_idx, txt, bbox) for (b_idx, txt, _), bbox in zip(merged_kept, bboxes)]
 
 
 def _rects_overlap(r1: pymupdf.Rect, r2: pymupdf.Rect, threshold: float = 0.4) -> bool:
