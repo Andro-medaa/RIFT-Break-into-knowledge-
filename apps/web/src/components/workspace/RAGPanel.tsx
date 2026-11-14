@@ -61,6 +61,7 @@ import {
   type WordTimestamp,
 } from "@/lib/api";
 import { useWorkspace } from "@/lib/workspace";
+import { CyberMascotLoader } from "@/components/common/CyberMascotLoader";
 import type { Citation, RAGMessage } from "@/lib/workspace";
 import WaveformAnimation from "./WaveformAnimation";
 import { ChatGPTVoiceInterface } from "./VoiceVisualizer";
@@ -320,7 +321,7 @@ function CitationChip({
   onNavigate: (c: Citation) => void;
 }) {
   const isWeb = !!citation.url || citation.source === "web";
-  const isImage = !isWeb && (citation.chunkType === "image" || citation.chunkType === "figure" || citation.chunkType === "diagram");
+  const isImage = !isWeb && (citation.chunkType === "image" || citation.chunkType === "figure" || citation.chunkType === "diagram" || !!citation.imageUrl);
   const displayNum = citation.number ?? index;
   const [showTooltip, setShowTooltip] = useState(false);
 
@@ -334,9 +335,17 @@ function CitationChip({
           gap: "5px",
           padding: "3px 8px",
           borderRadius: "6px",
-          border: isWeb ? "1px solid rgba(45, 212, 191, 0.45)" : "1px solid rgba(0, 245, 212, 0.45)",
-          background: isWeb ? "rgba(13, 148, 136, 0.16)" : "rgba(0, 245, 212, 0.12)",
-          color: isWeb ? "#5eead4" : "#00f5d4",
+          border: isWeb
+            ? "1px solid rgba(45, 212, 191, 0.45)"
+            : isImage
+            ? "1px solid rgba(192, 132, 252, 0.55)"
+            : "1px solid rgba(0, 245, 212, 0.45)",
+          background: isWeb
+            ? "rgba(13, 148, 136, 0.16)"
+            : isImage
+            ? "rgba(168, 85, 247, 0.16)"
+            : "rgba(0, 245, 212, 0.12)",
+          color: isWeb ? "#5eead4" : isImage ? "#d8b4fe" : "#00f5d4",
           fontSize: "10.5px",
           fontFamily: "var(--font-mono)",
           fontWeight: 500,
@@ -354,7 +363,7 @@ function CitationChip({
         {citation.label}
       </button>
 
-      {/* Tooltip with snippet or url */}
+      {/* Tooltip with snippet, image thumbnail, or url */}
       {showTooltip && (
         <div
           style={{
@@ -362,13 +371,13 @@ function CitationChip({
             bottom: "calc(100% + 5px)",
             left: 0,
             background: "rgba(2, 6, 10, 0.98)",
-            border: `1px solid ${isWeb ? "rgba(45, 212, 191, 0.5)" : "rgba(0, 245, 212, 0.5)"}`,
+            border: `1px solid ${isWeb ? "rgba(45, 212, 191, 0.5)" : isImage ? "rgba(192, 132, 252, 0.55)" : "rgba(0, 245, 212, 0.5)"}`,
             borderRadius: "6px",
-            padding: "5px 8px",
+            padding: "6px 9px",
             fontSize: "10px",
-            color: isWeb ? "#99f6e4" : "#a7f3d0",
+            color: isWeb ? "#99f6e4" : isImage ? "#e9d5ff" : "#a7f3d0",
             whiteSpace: "normal",
-            maxWidth: "240px",
+            maxWidth: "260px",
             zIndex: 60,
             boxShadow: "0 8px 30px rgba(0, 0, 0, 0.85), 0 0 15px rgba(0, 245, 212, 0.2)",
             pointerEvents: "none",
@@ -378,9 +387,22 @@ function CitationChip({
             <div style={{ wordBreak: "break-all" }}>{citation.url}</div>
           ) : (
             <div>
-              <div style={{ fontWeight: 600, color: "#00f5d4" }}>Jump to Page {citation.page} in PDF</div>
+              <div style={{ fontWeight: 600, color: isImage ? "#c084fc" : "#00f5d4", display: "flex", alignItems: "center", gap: "4px" }}>
+                {isImage && <ImageIcon size={10} />}
+                {isImage ? `Jump to Figure on Page ${citation.page}` : `Jump to Page ${citation.page} in PDF`}
+              </div>
+              {citation.imageUrl && (
+                <div style={{ marginTop: "4px", borderRadius: "4px", overflow: "hidden", border: "1px solid rgba(192, 132, 252, 0.35)", maxHeight: "90px" }}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={citation.imageUrl}
+                    alt="Figure thumbnail"
+                    style={{ width: "100%", maxHeight: "90px", objectFit: "contain", background: "#0a0a14" }}
+                  />
+                </div>
+              )}
               {citation.snippet && (
-                <div style={{ fontSize: "9px", color: "#94a3b8", marginTop: "3px", lineHeight: "1.4" }}>
+                <div style={{ fontSize: "9px", color: "#94a3b8", marginTop: "4px", lineHeight: "1.4" }}>
                   &ldquo;{citation.snippet.slice(0, 110)}…&rdquo;
                 </div>
               )}
@@ -395,7 +417,15 @@ function CitationChip({
 /* ═══════════════════════════════════════════════════════════════════════════════
    Main RAGPanel Component
 ════════════════════════════════════════════════════════════════════════════════ */
-export default function RAGPanel() {
+export default function RAGPanel({
+  onCitationClickClose,
+  onCloseMobile,
+  isMobile,
+}: {
+  onCitationClickClose?: () => void;
+  onCloseMobile?: () => void;
+  isMobile?: boolean;
+} = {}) {
   const params = useParams();
   const docId = (params?.docId as string) || (params?.id as string) || "";
 
@@ -2195,6 +2225,8 @@ export default function RAGPanel() {
         navigateToParagraph(targetId, {
           page: targetPage,
           ...targetBbox,
+          chunkType: cit.chunkType,
+          imageUrl: cit.imageUrl,
         });
       } else {
         navigateToParagraph(targetId);
@@ -2212,8 +2244,11 @@ export default function RAGPanel() {
         document.getElementById(`transcript-seg-${targetId}`) ||
         document.getElementById(targetId);
       transEl?.scrollIntoView({ behavior: "smooth", block: "center" });
+
+      // If in mobile modal view, immediately close chat to focus on target PDF bbox
+      onCitationClickClose?.();
     },
-    [paragraphs, navigateToParagraph, setCurrentPage]
+    [paragraphs, navigateToParagraph, setCurrentPage, onCitationClickClose]
   );
 
   return (
@@ -2850,6 +2885,29 @@ export default function RAGPanel() {
           <Radio size={10} className={listeningMode ? "animate-pulse text-teal-400" : ""} />
           <span>{listeningMode ? "Listening" : "Listen"}</span>
         </button>
+
+        {isMobile && (
+          <button
+            onClick={onCloseMobile}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: "24px",
+              height: "24px",
+              borderRadius: "5px",
+              background: "rgba(255, 255, 255, 0.08)",
+              border: "1px solid rgba(255, 255, 255, 0.15)",
+              color: "#94a3b8",
+              cursor: "pointer",
+              marginLeft: "4px",
+              flexShrink: 0,
+            }}
+            title="Return to PDF"
+          >
+            <X size={12} />
+          </button>
+        )}
       </div>
 
       {listeningMode ? (
@@ -3167,11 +3225,14 @@ export default function RAGPanel() {
                   )}
 
                   {msg.isLoading ? (
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "4px 0" }}>
-                      <ThinkingWave />
-                      <span style={{ fontSize: "11px", color: "#00f5d4", fontFamily: "var(--font-mono)" }}>
-                        Synthesizing grounded answer…
-                      </span>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "4px 0", width: "100%" }}>
+                      <CyberMascotLoader
+                        size="inline"
+                        mode="embedding"
+                        title="Synthesizing grounded answer…"
+                        subtitle="Retrieving citations and formulating response"
+                        showSwitchButton={false}
+                      />
                     </div>
                   ) : isEditing ? (
                     <div style={{ display: "flex", flexDirection: "column", gap: "6px", width: "100%", minWidth: "240px" }}>

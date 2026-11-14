@@ -149,7 +149,49 @@ const BBoxItem = memo(function BBoxItem({
   onMouseEnter: (id: string) => void;
   onMouseLeave: () => void;
 }) {
+  const isImage =
+    p.chunkType === "image" ||
+    p.chunkType === "figure" ||
+    Boolean(p.imageUrl) ||
+    p.text.startsWith("[Figure") ||
+    p.text.startsWith("[Diagram");
   const isNearRight = (p.bbox!.x + p.bbox!.w) > 0.88;
+
+  const borderColor = isImage
+    ? isActive
+      ? "#00f5d4"
+      : isHovered
+      ? "rgba(0, 245, 212, 0.85)"
+      : "rgba(0, 245, 212, 0.25)"
+    : isActive
+    ? "#c084fc"
+    : isHovered
+    ? "rgba(192, 132, 252, 0.85)"
+    : "rgba(168, 85, 247, 0.18)";
+
+  const bgColor = isImage
+    ? isActive
+      ? "rgba(0, 245, 212, 0.18)"
+      : isHovered
+      ? "rgba(0, 245, 212, 0.08)"
+      : "transparent"
+    : isActive
+    ? "rgba(168, 85, 247, 0.22)"
+    : isHovered
+    ? "rgba(168, 85, 247, 0.08)"
+    : "transparent";
+
+  const glowShadow = isImage
+    ? isActive
+      ? "0 0 28px rgba(0, 245, 212, 0.75), 0 0 10px rgba(192, 132, 252, 0.5)"
+      : isHovered
+      ? "0 0 14px rgba(0, 245, 212, 0.35)"
+      : "none"
+    : isActive
+    ? "0 0 24px rgba(192, 132, 252, 0.7), 0 0 8px rgba(217, 70, 239, 0.5)"
+    : isHovered
+    ? "0 0 12px rgba(192, 132, 252, 0.25)"
+    : "none";
 
   return (
     <div
@@ -168,28 +210,22 @@ const BBoxItem = memo(function BBoxItem({
         boxSizing: "border-box",
         ...bboxPositionStyle(p.bbox!),
         border: isActive
-          ? "2px solid #c084fc"
+          ? `2px solid ${borderColor}`
           : isHovered
-          ? "1.5px dashed rgba(192, 132, 252, 0.85)"
-          : "1px solid rgba(168, 85, 247, 0.18)",
-        background: isActive
-          ? "rgba(168, 85, 247, 0.22)"
-          : isHovered
-          ? "rgba(168, 85, 247, 0.08)"
-          : "transparent",
+          ? `1.5px dashed ${borderColor}`
+          : `1px solid ${borderColor}`,
+        background: bgColor,
         borderRadius: "5px",
         cursor: "pointer",
         pointerEvents: "all",
         transition: "border-color 0.14s ease, background-color 0.14s ease, box-shadow 0.14s ease",
-        boxShadow: isActive
-          ? "0 0 24px rgba(192, 132, 252, 0.7), 0 0 8px rgba(217, 70, 239, 0.5)"
-          : "none",
+        boxShadow: glowShadow,
         overflow: "visible",
         zIndex: isActive || isHovered ? 45 : 12,
       }}
     >
       {/* Corner reticles on active */}
-      {isActive && <CornerBrackets color="rgba(192, 132, 252, 0.95)" />}
+      {isActive && <CornerBrackets color={isImage ? "rgba(0, 245, 212, 0.95)" : "rgba(192, 132, 252, 0.95)"} />}
 
       {/* Scanline sweep on active */}
       {isActive && (
@@ -198,7 +234,9 @@ const BBoxItem = memo(function BBoxItem({
           style={{
             position: "absolute",
             inset: 0,
-            background: "linear-gradient(90deg, transparent, rgba(192, 132, 252, 0.35), transparent)",
+            background: isImage
+              ? "linear-gradient(90deg, transparent, rgba(0, 245, 212, 0.35), transparent)"
+              : "linear-gradient(90deg, transparent, rgba(192, 132, 252, 0.35), transparent)",
             pointerEvents: "none",
             overflow: "hidden",
           }}
@@ -364,7 +402,7 @@ function BBoxOverlay({
   paragraphs: TranscriptParagraph[];
   scriptSegments?: ScriptSegmentItem[];
   activeParagraphId: string | null;
-  activeBBox: { page: number; x: number; y: number; w: number; h: number } | null;
+  activeBBox: { page: number; x: number; y: number; w: number; h: number; chunkType?: string; imageUrl?: string } | null;
   onSelect: (id: string, bbox?: { page: number; x: number; y: number; w: number; h: number }) => void;
   spotlight: boolean;
 }) {
@@ -481,45 +519,52 @@ function BBoxOverlay({
       })()}
 
       {/* Render directly highlighted bbox if citation/segment didn't match existing paragraphs */}
-      {isDirectActiveBboxOnThisPage && (
-        <div
-          style={{
-            position: "absolute",
-            boxSizing: "border-box",
-            ...bboxPositionStyle(activeBBox),
-            border: "2px solid #c084fc",
-            background: "rgba(168, 85, 247, 0.22)",
-            borderRadius: "5px",
-            boxShadow: "0 0 24px rgba(192, 132, 252, 0.7), 0 0 8px rgba(217, 70, 239, 0.5)",
-            zIndex: 30,
-            pointerEvents: "none",
-          }}
-        >
-          <CornerBrackets color="rgba(192, 132, 252, 0.95)" />
+      {isDirectActiveBboxOnThisPage && (() => {
+        const isFig = activeBBox?.chunkType === "image" || activeBBox?.chunkType === "figure" || Boolean(activeBBox?.imageUrl);
+        return (
           <div
             style={{
               position: "absolute",
-              top: activeBBox.y < 0.035 ? "calc(100% + 4px)" : "-24px",
-              left: 0,
-              display: "flex",
-              alignItems: "center",
-              gap: "4px",
-              padding: "2px 8px",
+              boxSizing: "border-box",
+              ...bboxPositionStyle(activeBBox),
+              border: `2px solid ${isFig ? "#00f5d4" : "#c084fc"}`,
+              background: isFig ? "rgba(0, 245, 212, 0.18)" : "rgba(168, 85, 247, 0.22)",
               borderRadius: "5px",
-              background: "rgba(12, 6, 22, 0.95)",
-              border: "1px solid rgba(192, 132, 252, 0.7)",
-              fontSize: "9.5px",
-              color: "#e9d5ff",
-              fontFamily: "var(--font-mono)",
-              whiteSpace: "nowrap",
-              zIndex: 35,
-              boxShadow: "0 2px 12px rgba(168, 85, 247, 0.4)",
+              boxShadow: isFig
+                ? "0 0 28px rgba(0, 245, 212, 0.75), 0 0 10px rgba(192, 132, 252, 0.5)"
+                : "0 0 24px rgba(192, 132, 252, 0.7), 0 0 8px rgba(217, 70, 239, 0.5)",
+              zIndex: 30,
+              pointerEvents: "none",
             }}
           >
-            <span style={{ color: "#d946ef" }}>●</span> Source Citation
+            <CornerBrackets color={isFig ? "rgba(0, 245, 212, 0.95)" : "rgba(192, 132, 252, 0.95)"} />
+            <div
+              style={{
+                position: "absolute",
+                top: activeBBox.y < 0.035 ? "calc(100% + 4px)" : "-24px",
+                left: 0,
+                display: "flex",
+                alignItems: "center",
+                gap: "4px",
+                padding: "2px 8px",
+                borderRadius: "5px",
+                background: "rgba(12, 6, 22, 0.95)",
+                border: `1px solid ${isFig ? "rgba(0, 245, 212, 0.7)" : "rgba(192, 132, 252, 0.7)"}`,
+                fontSize: "9.5px",
+                color: isFig ? "#99f6e4" : "#e9d5ff",
+                fontFamily: "var(--font-mono)",
+                whiteSpace: "nowrap",
+                zIndex: 35,
+                boxShadow: isFig
+                  ? "0 2px 12px rgba(0, 245, 212, 0.4)"
+                  : "0 2px 12px rgba(168, 85, 247, 0.4)",
+              }}
+            >
+              <span style={{ color: isFig ? "#00f5d4" : "#d946ef" }}>●</span> Source Citation
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {withBox.map((p) => (
         <BBoxItem
@@ -1358,7 +1403,7 @@ const PageWrapper = memo(function PageWrapper({
   paragraphs: TranscriptParagraph[];
   scriptSegments?: ScriptSegmentItem[];
   activeParagraphId: string | null;
-  activeBBox: { page: number; x: number; y: number; w: number; h: number } | null;
+  activeBBox: { page: number; x: number; y: number; w: number; h: number; chunkType?: string; imageUrl?: string } | null;
   activeBboxPage: number | null;
   spotlight: boolean;
   onSelectPage: (n: number) => void;

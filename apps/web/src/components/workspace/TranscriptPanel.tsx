@@ -20,6 +20,10 @@ import {
   Square,
   Volume2,
   ChevronDown,
+  ChevronUp,
+  ChevronLeft,
+  ChevronRight,
+  MessageSquare,
   Sparkles,
   Loader2,
   ToggleLeft,
@@ -28,6 +32,7 @@ import {
   RotateCw,
   SlidersHorizontal,
   X,
+  ImageIcon,
 } from "lucide-react";
 import { useWorkspace } from "@/lib/workspace";
 import {
@@ -44,6 +49,7 @@ import {
 } from "@/lib/browserSpeech";
 import { WordKaraokeText } from "./WordKaraokeText";
 import { convertMathToSpokenText, convertMathToSpokenTextKeepCues } from "@/lib/markdownSpeech";
+import { CyberMascotLoader } from "@/components/common/CyberMascotLoader";
 
 /* ── Available languages ─────────────────────────────────────────────────── */
 const LANG_OPTIONS = [
@@ -57,12 +63,72 @@ const LANG_OPTIONS = [
 
 const SPEEDS = [0.85, 1.0, 1.2, 1.5];
 
-/* ── 4 curated ElevenLabs Voices (2 male, 2 female) ──────────────────────── */
-const FOUR_VOICES: VoiceOption[] = [
-  { voice_id: "pNInz6obpgDQGcFmaJgB", name: "Adam", description: "Male (Deep & Grounded)", category: "premade" },
-  { voice_id: "EXAVITQu4vr4xnSDxMaL", name: "Bella", description: "Female (Soft & Gentle)", category: "premade" },
-  { voice_id: "tSVwqkJGEKjLklhiN0Nx", name: "Viraj", description: "Male (Rich Narrator)", category: "premade" },
-  { voice_id: "m4hBEimiy2ffkQ0hHMVD", name: "Katie", description: "Female (Authentic & Clear)", category: "premade" },
+/* ── Curated ElevenLabs Voices ─────────────────────────────────────────── */
+const CURATED_VOICES: VoiceOption[] = [
+  {
+    voice_id: "hpp4J3VqNfWAUOO0d1Us",
+    name: "Bella",
+    description: "Female (Soft & Gentle)",
+    category: "premade",
+    preview_url:
+      "https://storage.googleapis.com/eleven-public-prod/premade/voices/hpp4J3VqNfWAUOO0d1Us/dab0f5ba-3aa4-48a8-9fad-f138fea1126d.mp3",
+  },
+  {
+    voice_id: "EXAVITQu4vr4xnSDxMaL",
+    name: "Sarah",
+    description: "Female (Soft & Expressive)",
+    category: "premade",
+    preview_url:
+      "https://storage.googleapis.com/eleven-public-prod/premade/voices/EXAVITQu4vr4xnSDxMaL/01a3e33c-6e99-4ee7-8543-ff2216a32186.mp3",
+  },
+  {
+    voice_id: "pFZP5JQG7iQjIQuC4Bku",
+    name: "Lily",
+    description: "Female (Velvety Actress, British)",
+    category: "premade",
+    preview_url:
+      "https://storage.googleapis.com/eleven-public-prod/premade/voices/pFZP5JQG7iQjIQuC4Bku/89b68b35-b3dd-4348-a84a-a3c13a3c2b30.mp3",
+  },
+  {
+    voice_id: "cgSgspJ2msm6clMCkdW9",
+    name: "Jessica",
+    description: "Female (Playful, Bright & Warm)",
+    category: "premade",
+    preview_url:
+      "https://storage.googleapis.com/eleven-public-prod/premade/voices/cgSgspJ2msm6clMCkdW9/56a97bf8-b69b-448f-846c-c3a11683d45a.mp3",
+  },
+  {
+    voice_id: "pNInz6obpgDQGcFmaJgB",
+    name: "Adam",
+    description: "Male (Deep & Grounded)",
+    category: "premade",
+    preview_url:
+      "https://storage.googleapis.com/eleven-public-prod/premade/voices/pNInz6obpgDQGcFmaJgB/d6905d7a-dd26-4187-bfff-1bd3a5ea7cac.mp3",
+  },
+  {
+    voice_id: "bIHbv24MWmeRgasZH58o",
+    name: "Will",
+    description: "Male (Relaxed Optimist)",
+    category: "premade",
+    preview_url:
+      "https://storage.googleapis.com/eleven-public-prod/premade/voices/bIHbv24MWmeRgasZH58o/8caf8f3d-ad29-4980-af41-53f20c72d7a4.mp3",
+  },
+  {
+    voice_id: "SOYHLrjzK2X1ezoPC6cr",
+    name: "Harry",
+    description: "Male (Fierce & Character)",
+    category: "premade",
+    preview_url:
+      "https://storage.googleapis.com/eleven-public-prod/premade/voices/SOYHLrjzK2X1ezoPC6cr/86d178f6-f4b6-4e0e-85be-3de19f490794.mp3",
+  },
+  {
+    voice_id: "cjVigY5qzO86Huf0OWal",
+    name: "Eric",
+    description: "Male (Smooth & Trustworthy)",
+    category: "premade",
+    preview_url:
+      "https://storage.googleapis.com/eleven-public-prod/premade/voices/cjVigY5qzO86Huf0OWal/d098fda0-6456-4030-b3d8-63aa048c9070.mp3",
+  },
 ];
 
 /* ── Minimal wave motion bar while dictating ─────────────────────────────── */
@@ -95,7 +161,17 @@ function DictationWave({ active = false }: { active?: boolean }) {
 }
 
 /* ── Main TranscriptPanel ────────────────────────────────────────────────── */
-export default function TranscriptPanel() {
+export default function TranscriptPanel({
+  isMobile = false,
+  isExpanded = false,
+  onToggleMobileExpand,
+  onOpenChat,
+}: {
+  isMobile?: boolean;
+  isExpanded?: boolean;
+  onToggleMobileExpand?: () => void;
+  onOpenChat?: () => void;
+} = {}) {
   const {
     documentId,
     paragraphs,
@@ -132,9 +208,9 @@ export default function TranscriptPanel() {
 
   const playbackSessionRef = useRef(0);
 
-  // Voice & Language state (guaranteed 4 voices: Adam, Bella, Viraj, Katie)
-  const [voices, setVoices] = useState<VoiceOption[]>(FOUR_VOICES);
-  const [selectedVoiceId, setSelectedVoiceId] = useState(selectedElevenVoice || "pNInz6obpgDQGcFmaJgB");
+  // Voice & Language state (Bella default, with Sarah, Lily, Jessica, Adam, Will, Harry, Eric)
+  const [voices, setVoices] = useState<VoiceOption[]>(CURATED_VOICES);
+  const [selectedVoiceId, setSelectedVoiceId] = useState(selectedElevenVoice || "hpp4J3VqNfWAUOO0d1Us");
   const [selectedLang, setSelectedLang] = useState("en");
   const [selectedSpeed, setSelectedSpeed] = useState(1.0);
   const [isGeneratingScript, setIsGeneratingScript] = useState(false);
@@ -149,6 +225,65 @@ export default function TranscriptPanel() {
       setSelectedElevenVoice(selectedVoiceId);
     }
   }, [selectedVoiceId, setSelectedElevenVoice]);
+
+  // Audio preview player for voice demo clips (zero ElevenLabs API calls)
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const [previewingVoiceId, setPreviewingVoiceId] = useState<string | null>(null);
+
+  const toggleVoicePreview = useCallback((v: VoiceOption) => {
+    if (!v.preview_url) return;
+
+    // Toggle off if currently playing this voice
+    if (previewingVoiceId === v.voice_id) {
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause();
+        previewAudioRef.current.currentTime = 0;
+      }
+      setPreviewingVoiceId(null);
+      return;
+    }
+
+    // Stop any previously playing preview
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current.currentTime = 0;
+    }
+
+    const audio = new Audio(v.preview_url);
+    previewAudioRef.current = audio;
+    setPreviewingVoiceId(v.voice_id);
+
+    audio.onended = () => {
+      setPreviewingVoiceId((current) => (current === v.voice_id ? null : current));
+    };
+
+    audio.onerror = () => {
+      setPreviewingVoiceId((current) => (current === v.voice_id ? null : current));
+    };
+
+    audio.play().catch(() => {
+      setPreviewingVoiceId((current) => (current === v.voice_id ? null : current));
+    });
+  }, [previewingVoiceId]);
+
+  // If voice dropdown closes, immediately stop any playing voice preview
+  useEffect(() => {
+    if (!voiceDropdownOpen && previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current.currentTime = 0;
+      setPreviewingVoiceId(null);
+    }
+  }, [voiceDropdownOpen]);
+
+  // Clean up preview audio on unmount
+  useEffect(() => {
+    return () => {
+      if (previewAudioRef.current) {
+        previewAudioRef.current.pause();
+        previewAudioRef.current.src = "";
+      }
+    };
+  }, []);
 
   // Audio Playback & Karaoke state
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -192,6 +327,8 @@ export default function TranscriptPanel() {
         page: p.bbox?.page ?? 1,
         bbox: p.bbox,
         chapterHeading: undefined,
+        chunkType: p.chunkType,
+        imageUrl: p.imageUrl,
         idx,
       }));
     }
@@ -203,23 +340,26 @@ export default function TranscriptPanel() {
         page: s.page_number,
         bbox: s.bbox ? { page: s.page_number, ...s.bbox } : undefined,
         chapterHeading: s.chapter_heading,
+        chunkType: s.chunk_type,
+        imageUrl: s.image_url,
         idx,
       }));
     }
     return [];
   }, [scriptSegments, paragraphs, showParsedText]);
 
-  // Load voices from backend while ensuring all 4 voices (Adam, Bella, Viraj, Katie) are preserved
+  // Load voices from backend while ensuring all curated voices are preserved
   useEffect(() => {
     getElevenLabsVoices()
       .then((vList) => {
         if (vList && vList.length > 0) {
           const map = new Map<string, VoiceOption>();
-          FOUR_VOICES.forEach((v) => map.set(v.name.toLowerCase(), v));
+          CURATED_VOICES.forEach((v) => map.set(v.voice_id, v));
           vList.forEach((v) => {
-            const key = v.name.toLowerCase();
-            if (map.has(key)) {
-              map.set(key, { ...map.get(key)!, voice_id: v.voice_id });
+            if (map.has(v.voice_id)) {
+              map.set(v.voice_id, { ...map.get(v.voice_id)!, ...v });
+            } else {
+              map.set(v.voice_id, v);
             }
           });
           setVoices(Array.from(map.values()));
@@ -451,10 +591,11 @@ export default function TranscriptPanel() {
             if (isRepeatingSingleRef.current) {
               setPlaybackState("idle");
             } else if (segIndex < displayItems.length - 1) {
-              // Ensure we are strictly still in browser mode before auto-advancing
-              if (voiceEngineRef.current === "browser") {
+              // Asynchronous tick delay to allow Chromium speech engine to cleanly dispose
+              // of finished utterance before initiating next segment
+              setTimeout(() => {
                 playSegmentAudioRef.current?.(segIndex + 1, false);
-              }
+              }, 70);
             } else {
               setPlaybackState("idle");
             }
@@ -494,7 +635,7 @@ export default function TranscriptPanel() {
       setCurrentAudioTime(0);
 
       // ── If Browser Built-in Voices selected, use SpeechSynthesis directly ──
-      if (voiceEngine === "browser") {
+      if (voiceEngineRef.current === "browser") {
         if (audioRef.current) {
           try {
             audioRef.current.pause();
@@ -583,9 +724,9 @@ export default function TranscriptPanel() {
             // SINGLE REPEAT: Stop here, don't advance to next segment!
             setPlaybackState("idle");
           } else if (segIndex < displayItems.length - 1) {
-            if (voiceEngineRef.current === "ai") {
+            setTimeout(() => {
               playSegmentAudioRef.current?.(segIndex + 1, false);
-            }
+            }, 60);
           } else {
             setPlaybackState("idle");
           }
@@ -596,18 +737,28 @@ export default function TranscriptPanel() {
           setIsAudioLoading(false);
           setActiveTimeline([]);
           setTimelineSegIdx(null);
-          setPlaybackState("idle");
+          console.warn("AI audio playback error; seamlessly switching to Browser Built-in Voice");
+          voiceEngineRef.current = "browser";
+          prevEngineRef.current = "browser";
+          triggerVoiceFallback("AI Emotional Voice unavailable. Switched to Browser Built-in Voice.");
+          playBrowserSpeech(convertMathToSpokenText(item.text), segIndex);
         };
       } catch (err: any) {
         if (currentSession !== playbackSessionRef.current) return;
         console.warn("AI Voice error; switching to Browser Built-in Voice:", err);
         // Automatic fallback per user spec
+        voiceEngineRef.current = "browser";
+        prevEngineRef.current = "browser";
         triggerVoiceFallback("AI Emotional Voice unavailable. Switched to Browser Built-in Voice.");
         playBrowserSpeech(convertMathToSpokenText(item.text), segIndex);
       }
     },
     [displayItems, selectedVoiceId, selectedSpeed, voiceEngine, triggerVoiceFallback, playBrowserSpeech, setActiveParagraph, navigateToParagraph, setPlaybackState]
   );
+
+  playSegmentAudioRef.current = playSegmentAudio;
+  voiceEngineRef.current = voiceEngine;
+  playbackStateRef.current = playbackState;
 
   useEffect(() => {
     playSegmentAudioRef.current = playSegmentAudio;
@@ -661,7 +812,8 @@ export default function TranscriptPanel() {
         setPlaybackState("playing");
       }
     } else {
-      playSegmentAudio(activeSegIdx);
+      isRepeatingSingleRef.current = false;
+      playSegmentAudio(activeSegIdx, false);
     }
   }, [playbackState, activeSegIdx, voiceEngine, playSegmentAudio, setPlaybackState]);
 
@@ -690,6 +842,50 @@ export default function TranscriptPanel() {
       setCurrentAudioTime(sec);
     }
   }, []);
+
+  const playPrevSegment = useCallback(() => {
+    if (activeSegIdx > 0) {
+      const prevIdx = activeSegIdx - 1;
+      setActiveSegIdx(prevIdx);
+      const item = displayItems[prevIdx];
+      if (item?.chunkId) {
+        navigateToParagraph(item.chunkId, item.bbox);
+      }
+      if (playbackState === "playing") {
+        playSegmentAudio(prevIdx, false);
+      }
+    }
+  }, [activeSegIdx, displayItems, navigateToParagraph, playbackState, playSegmentAudio]);
+
+  const playNextSegment = useCallback(() => {
+    if (activeSegIdx < displayItems.length - 1) {
+      const nextIdx = activeSegIdx + 1;
+      setActiveSegIdx(nextIdx);
+      const item = displayItems[nextIdx];
+      if (item?.chunkId) {
+        navigateToParagraph(item.chunkId, item.bbox);
+      }
+      if (playbackState === "playing") {
+        playSegmentAudio(nextIdx, false);
+      }
+    }
+  }, [activeSegIdx, displayItems, navigateToParagraph, playbackState, playSegmentAudio]);
+
+  const touchStartY = useRef<number | null>(null);
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    touchStartY.current = e.touches[0].clientY;
+  }, []);
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (touchStartY.current !== null) {
+      const delta = touchStartY.current - e.changedTouches[0].clientY;
+      if (!isExpanded && delta > 25) {
+        onToggleMobileExpand?.();
+      } else if (isExpanded && delta < -25) {
+        onToggleMobileExpand?.();
+      }
+    }
+    touchStartY.current = null;
+  }, [isExpanded, onToggleMobileExpand]);
 
   // Handle switching between Browser Voices and AI Voices mid-playback without overlap
   const prevEngineRef = useRef(voiceEngine);
@@ -729,22 +925,19 @@ export default function TranscriptPanel() {
     if (prevVoiceRef.current === selectedVoiceId) return;
     prevVoiceRef.current = selectedVoiceId;
 
-    // Invalidate prior synthesis sessions
-    const currentSession = ++playbackSessionRef.current;
-
-    // Hard stop browser speech immediately
-    browserSpeechRef.current?.stop();
-    cancelAllBrowserSpeech();
-    setBrowserWords([]);
-    setBrowserWordIdx(-1);
-    setActiveTimeline([]);
-    setTimelineSegIdx(null);
-
-    // Only re-synthesize if currently playing/paused in AI voice mode
+    // This effect is strictly for ElevenLabs AI voice changes; never interrupt browser speech!
     if (voiceEngine !== "ai") return;
     if (playbackState !== "playing" && playbackState !== "paused") return;
     const item = displayItems[activeSegIdx];
     if (!item) return;
+
+    // Invalidate prior synthesis sessions
+    const currentSession = ++playbackSessionRef.current;
+
+    setBrowserWords([]);
+    setBrowserWordIdx(-1);
+    setActiveTimeline([]);
+    setTimelineSegIdx(null);
 
     // Re-synthesize with new voice and resume
     (async () => {
@@ -829,6 +1022,223 @@ export default function TranscriptPanel() {
 
   const isPlaying = playbackState === "playing";
 
+  if (isMobile && !isExpanded) {
+    const activeItem = displayItems[activeSegIdx];
+    return (
+      <div
+        className="glass-panel"
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          width: "100%",
+          height: "56px",
+          background: "rgba(2, 6, 10, 0.96)",
+          borderRadius: "16px",
+          border: "1px solid rgba(0, 245, 212, 0.28)",
+          boxShadow: "0 8px 32px rgba(0, 0, 0, 0.8), 0 0 15px rgba(0, 245, 212, 0.12)",
+          overflow: "hidden",
+          position: "relative",
+          userSelect: "none",
+          flexShrink: 0,
+        }}
+      >
+        {/* Top Draggable Border Handle */}
+        <div
+          onClick={onToggleMobileExpand}
+          style={{
+            width: "100%",
+            display: "flex",
+            justifyContent: "center",
+            paddingTop: "4px",
+            paddingBottom: "2px",
+            cursor: "pointer",
+            flexShrink: 0,
+          }}
+          title="Drag up or tap to expand full transcript"
+        >
+          <div
+            style={{
+              width: "36px",
+              height: "3px",
+              borderRadius: "999px",
+              background: "rgba(0, 245, 212, 0.45)",
+              boxShadow: "0 0 6px rgba(0, 245, 212, 0.3)",
+            }}
+          />
+        </div>
+
+        {/* Content Row: Controls Trio (Backward, Play/Pause in Middle, Forward) + Page Tag + Karaoke Text */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "6px",
+            padding: "0 8px 4px 8px",
+            flex: 1,
+            minWidth: 0,
+            overflow: "hidden",
+          }}
+        >
+          {/* Controls Trio: Backward, Play/Pause in Middle, Forward */}
+          <div style={{ display: "flex", alignItems: "center", gap: "3px", flexShrink: 0 }}>
+            {/* Backward */}
+            <button
+              type="button"
+              onClick={playPrevSegment}
+              disabled={activeSegIdx <= 0}
+              style={{
+                width: "24px",
+                height: "24px",
+                borderRadius: "6px",
+                background: "rgba(255, 255, 255, 0.06)",
+                border: "1px solid rgba(0, 245, 212, 0.25)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: activeSegIdx <= 0 ? "default" : "pointer",
+                color: activeSegIdx <= 0 ? "#475569" : "#00f5d4",
+                opacity: activeSegIdx <= 0 ? 0.4 : 1,
+                padding: 0,
+              }}
+              title="Previous segment"
+            >
+              <ChevronLeft size={13} />
+            </button>
+
+            {/* Play/Pause in Middle */}
+            <button
+              type="button"
+              onClick={togglePlayback}
+              disabled={isAudioLoading || displayItems.length === 0}
+              style={{
+                width: "26px",
+                height: "26px",
+                borderRadius: "7px",
+                background: isPlaying
+                  ? "linear-gradient(135deg, #00f5d4, #0d9488)"
+                  : "rgba(255, 255, 255, 0.1)",
+                border: `1px solid ${isPlaying ? "#00f5d4" : "rgba(0, 245, 212, 0.4)"}`,
+                boxShadow: isPlaying ? "0 0 10px rgba(0, 245, 212, 0.5)" : "none",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+                color: isPlaying ? "#020406" : "#fff",
+                padding: 0,
+              }}
+              title={isPlaying ? "Pause dictation" : "Play dictation"}
+            >
+              {isAudioLoading ? (
+                <Loader2 size={12} className="animate-spin text-teal-400" />
+              ) : isPlaying ? (
+                <Pause size={12} fill="#020406" />
+              ) : (
+                <Play size={12} fill="#fff" style={{ marginLeft: "1px" }} />
+              )}
+            </button>
+
+            {/* Forward */}
+            <button
+              type="button"
+              onClick={playNextSegment}
+              disabled={activeSegIdx >= displayItems.length - 1}
+              style={{
+                width: "24px",
+                height: "24px",
+                borderRadius: "6px",
+                background: "rgba(255, 255, 255, 0.06)",
+                border: "1px solid rgba(0, 245, 212, 0.25)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: activeSegIdx >= displayItems.length - 1 ? "default" : "pointer",
+                color: activeSegIdx >= displayItems.length - 1 ? "#475569" : "#00f5d4",
+                opacity: activeSegIdx >= displayItems.length - 1 ? 0.4 : 1,
+                padding: 0,
+              }}
+              title="Next segment"
+            >
+              <ChevronRight size={13} />
+            </button>
+          </div>
+
+          {/* Page Tag */}
+          <span
+            style={{
+              fontSize: "9px",
+              fontFamily: "var(--font-mono)",
+              color: "#5eead4",
+              background: "rgba(0, 245, 212, 0.1)",
+              padding: "2px 5px",
+              borderRadius: "4px",
+              border: "1px solid rgba(0, 245, 212, 0.25)",
+              flexShrink: 0,
+            }}
+          >
+            p.{activeItem?.bbox?.page || 1}
+          </span>
+
+          {/* Karaoke text snippet */}
+          <div
+            onClick={onToggleMobileExpand}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              fontSize: "11.5px",
+              color: "#e2e8f0",
+              cursor: "pointer",
+              lineHeight: "1.4",
+            }}
+            title="Tap or drag up to expand"
+          >
+            {activeItem ? (
+              <WordKaraokeText
+                text={activeItem.text}
+                enableMarkdown={true}
+                wordsTimeline={timelineSegIdx === activeSegIdx ? activeTimeline : undefined}
+                currentTime={currentAudioTime}
+                browserWords={timelineSegIdx === activeSegIdx ? browserWords : undefined}
+                activeWordIndex={timelineSegIdx === activeSegIdx ? browserWordIdx : -1}
+                isActive={true}
+                isPlaying={isPlaying}
+                fontSize="11.5px"
+                lineHeight="1.4"
+                onSeekTime={seekToWordTime}
+              />
+            ) : (
+              <span style={{ color: "#64748b" }}>Transcript ready</span>
+            )}
+          </div>
+
+          {/* Small chevron up to hint expandable drawer */}
+          <button
+            type="button"
+            onClick={onToggleMobileExpand}
+            style={{
+              background: "none",
+              border: "none",
+              color: "#00f5d4",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
+              padding: "2px",
+              flexShrink: 0,
+            }}
+            title="Expand transcript drawer"
+          >
+            <ChevronUp size={14} />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className="glass-panel"
@@ -847,6 +1257,37 @@ export default function TranscriptPanel() {
         contain: "layout paint",
       }}
     >
+      {/* Top draggable border handle in mobile expanded view */}
+      {isMobile && isExpanded && (
+        <div
+          onClick={onToggleMobileExpand}
+          onTouchStart={handleTouchStart}
+          onTouchEnd={handleTouchEnd}
+          style={{
+            width: "100%",
+            display: "flex",
+            justifyContent: "center",
+            paddingTop: "6px",
+            paddingBottom: "4px",
+            cursor: "pointer",
+            background: "rgba(1, 4, 7, 0.98)",
+            borderBottom: "1px solid rgba(0, 245, 212, 0.08)",
+            flexShrink: 0,
+          }}
+          title="Drag down or tap to collapse"
+        >
+          <div
+            style={{
+              width: "40px",
+              height: "3.5px",
+              borderRadius: "999px",
+              background: "rgba(0, 245, 212, 0.45)",
+              boxShadow: "0 0 8px rgba(0, 245, 212, 0.3)",
+            }}
+          />
+        </div>
+      )}
+
       {/* ── Compact Header Row: All options & playback in one slim bar ── */}
       <div
         style={{
@@ -1013,7 +1454,7 @@ export default function TranscriptPanel() {
           }}
           title={
             scriptInstruction.trim()
-              ? `AI Script Guidance: "${scriptInstruction}" (Click to view or edit)`
+              ? `AI Script: "${scriptInstruction}" (Click to view or edit)`
               : "Generate or customize AI spoken script with Gemini Flash"
           }
         >
@@ -1023,21 +1464,6 @@ export default function TranscriptPanel() {
             <Sparkles size={11} color="#00f5d4" />
           )}
           <span>{isGeneratingScript ? "Writing…" : "AI Script"}</span>
-          {scriptInstruction.trim() && !isGeneratingScript && (
-            <span
-              style={{
-                fontSize: "8.5px",
-                background: "rgba(0, 245, 212, 0.25)",
-                color: "#00f5d4",
-                padding: "1px 4px",
-                borderRadius: "3px",
-                letterSpacing: "0.04em",
-                fontWeight: 700,
-              }}
-            >
-              GUIDED
-            </span>
-          )}
           <ChevronDown
             size={10}
             color="#94a3b8"
@@ -1087,20 +1513,27 @@ export default function TranscriptPanel() {
                   top: "100%",
                   right: 0,
                   marginTop: "4px",
-                  width: "165px",
+                  width: "220px",
                   background: "rgba(2, 6, 10, 0.98)",
                   backdropFilter: "blur(20px)",
                   border: "1px solid rgba(0, 245, 212, 0.25)",
                   borderRadius: "8px",
                   padding: "4px",
-                  boxShadow: "0 10px 30px rgba(0, 0, 0, 0.8)",
+                  boxShadow: "0 10px 30px rgba(0, 0, 0, 0.8), 0 0 20px rgba(0, 245, 212, 0.12)",
                   zIndex: 50,
+                  maxHeight: "340px",
+                  overflowY: "auto",
                 }}
               >
                 {voices.map((v) => (
                   <div
                     key={v.voice_id}
                     onClick={() => {
+                      if (previewAudioRef.current) {
+                        previewAudioRef.current.pause();
+                        previewAudioRef.current.currentTime = 0;
+                        setPreviewingVoiceId(null);
+                      }
                       setSelectedVoiceId(v.voice_id);
                       setSelectedElevenVoice(v.voice_id);
                       if (voiceEngine !== "ai") {
@@ -1109,17 +1542,97 @@ export default function TranscriptPanel() {
                       setVoiceDropdownOpen(false);
                     }}
                     style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
                       padding: "6px 8px",
                       fontSize: "11px",
-                      borderRadius: "5px",
+                      borderRadius: "6px",
                       cursor: "pointer",
                       color: v.voice_id === selectedVoiceId ? "#00f5d4" : "#cbd5e1",
                       background: v.voice_id === selectedVoiceId ? "rgba(0, 245, 212, 0.16)" : "transparent",
                       transition: "all 0.1s ease",
+                      gap: "6px",
                     }}
                   >
-                    <div style={{ fontWeight: 600 }}>{v.name}</div>
-                    <div style={{ fontSize: "9px", color: "#64748b" }}>{v.description}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: "6px" }}>
+                        <span>{v.name}</span>
+                        {v.voice_id === selectedVoiceId && (
+                          <span
+                            style={{
+                              fontSize: "8.5px",
+                              fontFamily: "var(--font-mono)",
+                              color: "#00f5d4",
+                              background: "rgba(0, 245, 212, 0.15)",
+                              padding: "1px 4px",
+                              borderRadius: "3px",
+                            }}
+                          >
+                            Active
+                          </span>
+                        )}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: "9px",
+                          color: "#64748b",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {v.description}
+                      </div>
+                    </div>
+
+                    {/* Voice demo audio clip button */}
+                    {v.preview_url && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleVoicePreview(v);
+                        }}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          width: "22px",
+                          height: "22px",
+                          borderRadius: "5px",
+                          background:
+                            previewingVoiceId === v.voice_id
+                              ? "linear-gradient(135deg, #00f5d4, #0d9488)"
+                              : "rgba(0, 245, 212, 0.12)",
+                          border: `1px solid ${
+                            previewingVoiceId === v.voice_id
+                              ? "#00f5d4"
+                              : "rgba(0, 245, 212, 0.3)"
+                          }`,
+                          color: previewingVoiceId === v.voice_id ? "#020406" : "#00f5d4",
+                          boxShadow:
+                            previewingVoiceId === v.voice_id
+                              ? "0 0 10px rgba(0, 245, 212, 0.6)"
+                              : "none",
+                          cursor: "pointer",
+                          flexShrink: 0,
+                          transition: "all 0.15s ease",
+                          padding: 0,
+                        }}
+                        title={
+                          previewingVoiceId === v.voice_id
+                            ? "Stop demo clip"
+                            : `Listen to sample of ${v.name}'s voice`
+                        }
+                      >
+                        {previewingVoiceId === v.voice_id ? (
+                          <Square size={9} fill="#020406" />
+                        ) : (
+                          <Volume2 size={11} />
+                        )}
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1154,6 +1667,54 @@ export default function TranscriptPanel() {
             </option>
           ))}
         </select>
+
+        {/* Mobile Expanded Actions: Open Chat FAB & Collapse Sheet */}
+        {isMobile && isExpanded && (
+          <div style={{ display: "flex", alignItems: "center", gap: "6px", marginLeft: "auto" }}>
+            {onOpenChat && (
+              <button
+                type="button"
+                onClick={onOpenChat}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px",
+                  fontSize: "10px",
+                  fontFamily: "var(--font-mono)",
+                  padding: "3px 8px",
+                  borderRadius: "6px",
+                  background: "rgba(0, 245, 212, 0.15)",
+                  border: "1px solid rgba(0, 245, 212, 0.4)",
+                  color: "#00f5d4",
+                  cursor: "pointer",
+                }}
+                title="Open Chat"
+              >
+                <MessageSquare size={11} />
+                <span>Chat</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onToggleMobileExpand}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: "24px",
+                height: "24px",
+                borderRadius: "6px",
+                background: "rgba(255, 255, 255, 0.08)",
+                border: "1px solid rgba(255, 255, 255, 0.15)",
+                color: "#94a3b8",
+                cursor: "pointer",
+              }}
+              title="Collapse Drawer"
+            >
+              <ChevronDown size={14} />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Collapsible Script Guidance & Generation Drawer */}
@@ -1381,34 +1942,17 @@ export default function TranscriptPanel() {
             style={{
               flex: 1,
               display: "flex",
-              flexDirection: "column",
               alignItems: "center",
               justifyContent: "center",
-              color: "var(--text-secondary)",
-              gap: "12px",
-              padding: "24px",
-              textAlign: "center",
+              padding: "16px",
             }}
           >
-            <div
-              style={{
-                width: "36px",
-                height: "36px",
-                borderRadius: "50%",
-                border: "2px solid rgba(0, 245, 212, 0.25)",
-                borderTopColor: "#00f5d4",
-                animation: "spin 0.8s linear infinite",
-              }}
+            <CyberMascotLoader
+              size="md"
+              mode="dictating"
+              title="Crafting Narrative Script…"
+              subtitle="Creating concise spoken lines synced to PDF equations & bounding boxes"
             />
-            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-              <Sparkles size={14} color="#00f5d4" />
-              <span style={{ fontSize: "13px", fontWeight: 600, color: "#f0fdfa" }}>
-                Generating AI Spoken Script…
-              </span>
-            </div>
-            <span style={{ fontSize: "11px", color: "#64748b", maxWidth: "240px", lineHeight: "1.5" }}>
-              Creating concise spoken lines synced to PDF bounding boxes
-            </span>
           </div>
         ) : displayItems.length === 0 ? (
           <div
@@ -1463,7 +2007,8 @@ export default function TranscriptPanel() {
                   const targetId = item.chunkId || item.id;
                   setActiveParagraph(targetId);
                   navigateToParagraph(targetId, item.bbox);
-                  playSegmentAudio(i);
+                  isRepeatingSingleRef.current = false;
+                  playSegmentAudio(i, false);
                 }}
                 style={{
                   display: "flex",
@@ -1514,6 +2059,27 @@ export default function TranscriptPanel() {
                   >
                     p.{item.page}
                   </div>
+                  {((item as any).chunkType === "image" || (item as any).imageUrl || item.text.startsWith("[Figure")) && (
+                    <div
+                      style={{
+                        fontSize: "8.5px",
+                        fontFamily: "var(--font-mono)",
+                        color: "#c084fc",
+                        background: "rgba(168, 85, 247, 0.15)",
+                        border: "1px solid rgba(192, 132, 252, 0.35)",
+                        borderRadius: "3px",
+                        padding: "1px 4px",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: "2px",
+                      }}
+                      title="Figure / Diagram"
+                    >
+                      <ImageIcon size={7} />
+                      <span>FIG</span>
+                    </div>
+                  )}
                   {isActive && isAudioLoading && (
                     <div
                       style={{

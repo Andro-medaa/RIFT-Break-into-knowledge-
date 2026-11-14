@@ -8,7 +8,9 @@ pseudo-embeddings for offline development / test environments without an API key
 
 import asyncio
 import hashlib
+import json
 import math
+import re
 from typing import Optional
 from google import genai
 from google.genai import types
@@ -115,29 +117,84 @@ class GeminiEmbeddingService:
         """Generate 768-dim embedding for a search query (task_type=RETRIEVAL_QUERY)."""
         return await self._embed_single_text(query, task_type="RETRIEVAL_QUERY")
 
-    async def caption_image(self, image_bytes: bytes, mime_type: str = "image/png") -> str:
-        """Use Gemini 2.0 Flash to generate a semantic caption for extracted PDF figures."""
+    async def analyze_image(
+        self,
+        image_bytes: bytes,
+        mime_type: str = "image/png",
+        page_number: int = 1,
+        surrounding_text: Optional[str] = None,
+    ) -> dict[str, str]:
+        """Perform multimodal OCR, label extraction, and deep technical captioning on extracted figures."""
         if not self._client:
-            return "Diagram or figure extracted from the PDF."
+            return {
+                "caption": f"Figure extracted from Page {page_number}.",
+                "ocr_text": surrounding_text or "",
+                "figure_label": f"Figure on Page {page_number}",
+            }
 
-        try:
-            prompt = (
-                "Provide a concise, detailed technical description of this figure, chart, "
-                "or table from a document. Include any visible labels, numbers, trends, or text."
-            )
-            response = await self._client.aio.models.generate_content(
-                model="gemini-3.8-flash",
-                contents=[
-                    types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-                    prompt,
-                ],
-            )
-            if response.text:
-                return response.text.strip()
-        except Exception as exc:
-            logger.warning(f"Gemini image captioning failed: {exc}")
+        candidate_models = [
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-1.5-flash",
+            "gemini-3.5-flash",
+            "gemini-3.8-flash",
+        ]
 
-        return "Diagram or figure extracted from the PDF."
+        context_hint = f"\nNearby document text: {surrounding_text[:300]}" if surrounding_text else ""
+
+        prompt = (
+            "Analyze this technical figure, diagram, chart, or illustration extracted from a document.\n"
+            "1. OCR: Extract ALL visible text, labels, node names, axis titles, legends, equations, and numbers in the image.\n"
+            "2. CAPTION: Write a comprehensive, precise technical summary explaining what the figure represents, its key components, data relationships, and takeaways.\n"
+            "3. LABEL: Detect any explicit figure number or title if visible (e.g. 'Figure 1', 'Figure 2(a)', 'Architecture Diagram').\n"
+            f"{context_hint}\n\n"
+            "Respond strictly in valid JSON with this schema:\n"
+            "{\n"
+            '  "figure_label": "Figure X or concise title",\n'
+            '  "caption": "Comprehensive technical description...",\n'
+            '  "ocr_text": "All transcribed text and labels..."\n'
+            "}"
+        )
+
+        for model_name in candidate_models:
+            try:
+                response = await self._client.aio.models.generate_content(
+                    model=model_name,
+                    contents=[
+                        types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                        prompt,
+                    ],
+                )
+                if response.text:
+                    raw = response.text.strip()
+                    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+                    raw = re.sub(r"\s*```$", "", raw)
+                    try:
+                        data = json.loads(raw)
+                        return {
+                            "caption": str(data.get("caption", "")).strip() or f"Diagram on Page {page_number}.",
+                            "ocr_text": str(data.get("ocr_text", "")).strip(),
+                            "figure_label": str(data.get("figure_label", "")).strip() or f"Figure on Page {page_number}",
+                        }
+                    except Exception:
+                        return {
+                            "caption": raw[:500],
+                            "ocr_text": "",
+                            "figure_label": f"Figure on Page {page_number}",
+                        }
+            except Exception as exc:
+                logger.debug(f"Model {model_name} image analysis failed: {exc}")
+
+        return {
+            "caption": f"Figure extracted from Page {page_number}.",
+            "ocr_text": surrounding_text or "",
+            "figure_label": f"Figure on Page {page_number}",
+        }
+
+    async def caption_image(self, image_bytes: bytes, mime_type: str = "image/png") -> str:
+        """Backward-compatible helper returning a combined caption string."""
+        res = await self.analyze_image(image_bytes, mime_type=mime_type)
+        return res.get("caption", "Diagram or figure extracted from the PDF.")
 
 
 embedding_service = GeminiEmbeddingService()

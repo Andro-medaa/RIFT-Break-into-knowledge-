@@ -19,10 +19,11 @@
 
 import { useCallback, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, FileUp, Loader2, X, RefreshCw, Send, FileText } from "lucide-react";
+import { Plus, FileUp, Loader2, X, RefreshCw, Send, FileText, Sparkles } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { uploadPdf } from "@/lib/api";
 import { useRift } from "@/lib/store";
+import { CyberMascotLoader } from "@/components/common/CyberMascotLoader";
 
 /* ─── helpers ───────────────────────────────────────────────────────────────── */
 
@@ -35,7 +36,7 @@ function fmtSize(bytes: number): string {
 
 /* ─── Component ─────────────────────────────────────────────────────────────── */
 
-export default function UploadBox() {
+export default function UploadBox({ isMobile = false }: { isMobile?: boolean } = {}) {
   const router = useRouter();
   const { addThread, setUploading, isUploading, setError } = useRift();
 
@@ -179,7 +180,7 @@ export default function UploadBox() {
           display: "flex",
           flexDirection: "column",
           justifyContent: "space-between",
-          padding: "20px 0px 18px 28px",
+          padding: isMobile ? "14px 10px 12px 14px" : "20px 0px 18px 28px",
           gap: "14px",
           minWidth: 0,
         }}
@@ -209,7 +210,7 @@ export default function UploadBox() {
             background: "transparent",
             border: "none",
             outline: "none",
-            fontSize: "19px",
+            fontSize: isMobile ? "16px" : "19px",
             lineHeight: "1.35",
             color: "#f0fdfa",
             fontFamily: "inherit",
@@ -362,7 +363,7 @@ export default function UploadBox() {
                 fontWeight: 500,
               }}
             >
-              <Loader2 size={14} className="animate-spin" color="#00f5d4" />
+              <Sparkles size={14} className="animate-pulse" color="#00f5d4" />
               {uploadProgress}
             </motion.div>
           )}
@@ -483,12 +484,12 @@ export default function UploadBox() {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          padding: "16px 20px 16px 12px",
+          padding: isMobile ? "12px 14px 12px 8px" : "16px 20px 16px 12px",
         }}
       >
         <AnimatePresence mode="wait">
           {isBusy ? (
-            /* Uploading spinner */
+            /* Uploading mascot companion */
             <motion.div
               key="loading-btn"
               initial={{ opacity: 0, scale: 0.75 }}
@@ -506,9 +507,10 @@ export default function UploadBox() {
                 justifyContent: "center",
                 flexShrink: 0,
                 boxShadow: "0 0 20px rgba(0, 245, 212, 0.2)",
+                overflow: "hidden",
               }}
             >
-              <Loader2 size={26} color="#00f5d4" className="animate-spin" />
+              <CyberMascotLoader size="avatar" />
             </motion.div>
           ) : canSend ? (
             /* Send button — luminous deep teal/cyan glowing ↑ arrow */

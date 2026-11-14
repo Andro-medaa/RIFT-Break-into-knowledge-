@@ -6,6 +6,7 @@ from app.core.config import settings
 from app.schemas.document import Chunk
 from app.schemas.lesson import LessonSegment, MoveType
 from app.teach.splitter import split_into_sentences
+from app.services.script import _parse_json_safely
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +169,7 @@ def plan_lesson(
         )
 
         # Attempt with gemini-3.5-flash or gemini-2.0-flash / gemini-1.5-flash
-        model_name = "gemini-3.5-flash"
+        model_name = "gemini-3.8-flash"
         
         response = client.models.generate_content(
             model=model_name,
@@ -181,7 +182,7 @@ def plan_lesson(
         )
 
         response_text = response.text.strip()
-        parsed_json = json.loads(response_text)
+        parsed_json = _parse_json_safely(response_text)
         if isinstance(parsed_json, dict) and "segments" in parsed_json:
             raw_segments = parsed_json["segments"]
         elif isinstance(parsed_json, list):

@@ -15,7 +15,9 @@ import { motion } from "framer-motion";
 import { getDocument } from "@/lib/api";
 import { useRift } from "@/lib/store";
 import type { Document } from "@/lib/types";
+import { useIsMobile } from "@/lib/useIsMobile";
 import dynamic from "next/dynamic";
+import { CyberMascotLoader } from "@/components/common/CyberMascotLoader";
 
 /* Load WorkspaceLayout as a client-only component (react-pdf uses browser APIs) */
 const WorkspaceLayout = dynamic(
@@ -30,30 +32,15 @@ const WorkspaceLayout = dynamic(
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          flexDirection: "column",
-          gap: "14px",
-          color: "var(--text-secondary)",
-          background: "rgba(3, 8, 12, 0.88)",
-          backdropFilter: "blur(20px)",
-          borderRadius: "20px",
-          border: "1px solid rgba(0, 245, 212, 0.15)",
+          padding: "24px",
         }}
       >
-        <div
-          style={{
-            width: "44px",
-            height: "44px",
-            borderRadius: "50%",
-            border: "2px solid rgba(0, 245, 212, 0.25)",
-            borderTopColor: "var(--accent-cyan)",
-            animation: "spin 0.8s linear infinite",
-          }}
+        <CyberMascotLoader
+          size="lg"
+          mode="parsing"
+          title="Loading 3-Section Workspace…"
+          subtitle="Initializing neural PDF canvas, teleprompter, and knowledge engine"
         />
-        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px", fontFamily: "var(--font-heading)" }}>
-          <Sparkles size={15} color="#00f5d4" />
-          <span>Loading 3-Section Workspace…</span>
-        </div>
       </div>
     ),
   }
@@ -70,6 +57,7 @@ export default function ChatPageContent({
   const [doc, setDoc] = useState<Document | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const isMobile = useIsMobile(768);
 
   useEffect(() => {
     setActiveThread(docId);
@@ -103,29 +91,15 @@ export default function ChatPageContent({
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          flexDirection: "column",
-          gap: "16px",
-          background: "radial-gradient(ellipse at 50% 30%, rgba(3, 22, 26, 0.92), #020406)",
-          borderRadius: "20px",
-          border: "1px solid rgba(0, 245, 212, 0.15)",
-          color: "var(--text-secondary)",
+          padding: "24px",
         }}
       >
-        <div
-          style={{
-            width: "48px",
-            height: "48px",
-            borderRadius: "50%",
-            border: "2px solid rgba(0, 245, 212, 0.25)",
-            borderTopColor: "var(--accent-cyan)",
-            animation: "spin 0.8s linear infinite",
-          }}
+        <CyberMascotLoader
+          size="lg"
+          mode="parsing"
+          title="Opening Document Workspace…"
+          subtitle="Decrypting document tensors and preparing cybernetic HUD"
         />
-        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px", fontFamily: "var(--font-heading)" }}>
-          <Sparkles size={16} color="#00f5d4" />
-          <span>Opening Document Workspace…</span>
-        </div>
       </div>
     );
   }
@@ -192,7 +166,7 @@ export default function ChatPageContent({
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          padding: "8px 14px",
+          padding: isMobile ? "4px 10px" : "8px 14px",
           borderRadius: "14px",
           background: "rgba(3, 8, 12, 0.90)",
           backdropFilter: "blur(20px)",
@@ -200,12 +174,12 @@ export default function ChatPageContent({
           border: "1px solid rgba(0, 245, 212, 0.14)",
           boxShadow: "0 4px 20px rgba(0, 0, 0, 0.65)",
           flexShrink: 0,
-          height: "46px",
+          height: isMobile ? "38px" : "46px",
           position: "relative",
           zIndex: 1000,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: isMobile ? "6px" : "10px", minWidth: 0 }}>
           <button
             onClick={() => {
               setActiveThread(null);
@@ -213,24 +187,24 @@ export default function ChatPageContent({
             }}
             className="btn-tool"
             style={{
-              padding: "5px 10px",
+              padding: isMobile ? "4px 8px" : "5px 10px",
               borderRadius: "8px",
               display: "flex",
               alignItems: "center",
-              gap: "6px",
+              gap: "5px",
               fontSize: "12px",
             }}
             title="Return to Home"
           >
             <ArrowLeft size={14} />
-            <span>Home</span>
+            {!isMobile && <span>Home</span>}
           </button>
 
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
-            <BookOpen size={15} color="#00f5d4" style={{ flexShrink: 0 }} />
+          <div style={{ display: "flex", alignItems: "center", gap: "6px", minWidth: 0 }}>
+            <BookOpen size={isMobile ? 13 : 15} color="#00f5d4" style={{ flexShrink: 0 }} />
             <span
               style={{
-                fontSize: "13.5px",
+                fontSize: isMobile ? "12px" : "13.5px",
                 fontWeight: 600,
                 color: "var(--text-primary)",
                 fontFamily: "var(--font-heading)",

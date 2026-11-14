@@ -231,7 +231,7 @@ const PdfCard = memo(function PdfCard({
 
 /* ─── Sidebar ──────────────────────────────────────────────────────────────── */
 
-export default function Sidebar() {
+export default function Sidebar({ isMobile = false }: { isMobile?: boolean } = {}) {
   const router = useRouter();
   const { threads, activeThreadId, setActiveThread, removeThread } = useRift();
   const [expanded, setExpanded] = useState(true);
@@ -271,11 +271,11 @@ export default function Sidebar() {
         ease: [0.16, 1, 0.3, 1],
       }}
       style={{
-        width: "33%",
-        minWidth: "270px",
-        maxWidth: "420px",
+        width: isMobile ? "100%" : "33%",
+        minWidth: isMobile ? "0px" : "270px",
+        maxWidth: isMobile ? "none" : "420px",
         height: "100%",
-        borderRadius: "26px",
+        borderRadius: isMobile ? "18px" : "26px",
         background: "rgba(3, 8, 12, 0.92)",
         backdropFilter: "none",
         WebkitBackdropFilter: "none",

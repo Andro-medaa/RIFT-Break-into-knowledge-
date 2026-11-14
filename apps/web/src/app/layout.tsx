@@ -30,19 +30,7 @@ export default function RootLayout({
            * Home page: Sidebar (33%) + MainContent (67%) sit inside here.
            * Chat/workspace page: layout.tsx overrides to full-width.
            */}
-          <div
-            style={{
-              height: "100%",
-              width: "100%",
-              display: "flex",
-              gap: "18px",
-              padding: "16px",
-              background: "transparent",
-              overflow: "hidden",
-              minHeight: 0,
-              minWidth: 0,
-            }}
-          >
+          <div className="rift-root-container">
             {children}
           </div>
         </RiftProvider>

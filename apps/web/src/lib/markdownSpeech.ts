@@ -14,7 +14,7 @@ export type MarkdownInlineNode =
   | { type: "code"; value: string }
   | { type: "link"; label: string; href: string }
   | { type: "citation"; numbers: number[]; raw: string }
-  | { type: "math"; value: string; display: boolean }
+  | { type: "math"; value: string; display: boolean; spokenText?: string }
   | { type: "sub"; children: MarkdownInlineNode[] }
   | { type: "sup"; children: MarkdownInlineNode[] }
   | { type: "audio_cue"; cue: string };
@@ -41,6 +41,20 @@ export function isSafeMarkdownHref(href: string): boolean {
     trimmed.startsWith("http://") ||
     trimmed.startsWith("mailto:")
   );
+}
+
+export function isLikelyPronunciation(inner: string): boolean {
+  const trimmed = inner.trim();
+  if (!trimmed) return false;
+  // Ignore audio cues like [laughs], [sighs], etc.
+  if (/^(laughs|sighs|excited|whispers|gasps|pauses)$/i.test(trimmed)) return false;
+  // Ignore numeric citations like [1], [1, 2], [1-3]
+  if (/^\d+(?:[\s,–-]+\d+)*$/.test(trimmed)) return false;
+  // Ignore URLs or hash anchors
+  if (/^(https?:\/\/|\/|#)/.test(trimmed)) return false;
+  // Must contain at least one letter (Latin or Unicode letter)
+  if (!/[a-zA-Z\u00c0-\u024f\u0900-\u097f]/.test(trimmed)) return false;
+  return true;
 }
 
 /**
@@ -73,8 +87,19 @@ export function parseInlineMarkdown(text: string): MarkdownInlineNode[] {
     if (text.startsWith("$$", idx)) {
       const end = text.indexOf("$$", idx + 2);
       if (end > idx + 2) {
-        nodes.push({ type: "math", value: text.slice(idx + 2, end), display: true });
-        idx = end + 2;
+        const mathContent = text.slice(idx + 2, end);
+        let nextIdx = end + 2;
+        let spokenText: string | undefined = undefined;
+        const pronMatch = /^\s*(?:\(([^)\r\n]+)\)|\[([^\]\r\n]+)\])/.exec(text.slice(nextIdx));
+        if (pronMatch) {
+          const inner = (pronMatch[1] || pronMatch[2] || "").trim();
+          if (isLikelyPronunciation(inner)) {
+            spokenText = inner;
+            nextIdx += pronMatch[0].length;
+          }
+        }
+        nodes.push({ type: "math", value: mathContent, display: true, spokenText });
+        idx = nextIdx;
         continue;
       }
     }
@@ -86,8 +111,18 @@ export function parseInlineMarkdown(text: string): MarkdownInlineNode[] {
         const content = text.slice(idx + 1, end);
         // Skip if it looks like a price (starts with digit) or is empty
         if (content.trim() && !/^\d/.test(content.trim())) {
-          nodes.push({ type: "math", value: content, display: false });
-          idx = end + 1;
+          let nextIdx = end + 1;
+          let spokenText: string | undefined = undefined;
+          const pronMatch = /^\s*(?:\(([^)\r\n]+)\)|\[([^\]\r\n]+)\])/.exec(text.slice(nextIdx));
+          if (pronMatch) {
+            const inner = (pronMatch[1] || pronMatch[2] || "").trim();
+            if (isLikelyPronunciation(inner)) {
+              spokenText = inner;
+              nextIdx += pronMatch[0].length;
+            }
+          }
+          nodes.push({ type: "math", value: content, display: false, spokenText });
+          idx = nextIdx;
           continue;
         }
       }
@@ -329,7 +364,7 @@ function inlinesToPlainText(inlines: MarkdownInlineNode[]): string {
     } else if (node.type === "link") {
       out += node.label;
     } else if (node.type === "math") {
-      out += mathExprToSpeech(node.value);
+      out += node.spokenText || mathExprToSpeech(node.value);
     } else if (node.type === "audio_cue") {
       // Skip audio cues in plain text extraction for speech
       continue;
@@ -504,7 +539,9 @@ export function parseMarkdownBlocks(raw: string): MarkdownBlockNode[] {
  * ElevenLabs AI Voice and Browser SpeechSynthesis, with natural pauses.
  */
 export function markdownToSpeechText(raw: string): string {
-  const preCleaned = stripCitationMarkers(raw || "");
+  const preCleaned = replaceMathWithSpokenPronunciation(
+    cleanMathTextForSpokenTts(stripCitationMarkers(raw || ""))
+  );
   if (!preCleaned.trim()) return "";
 
   const blocks = parseMarkdownBlocks(preCleaned);
@@ -577,7 +614,13 @@ export function markdownToSpeechText(raw: string): string {
 }
 
 export function normalizeWordForSync(word: string): string {
-  return word
+  const stripped = word
+    .replace(/[\u23de\u23df\u23dc\u23dd\u23b4\u23b5]/g, "")
+    .replace(
+      /\\?(?:mathcal|mathbb|mathbf|boldsymbol|bm|mathrm|mathit|mathsf|mathtt|mathfrak|mathscr|text)\{?([a-z0-9]+)\}?/gi,
+      "$1"
+    );
+  return stripped
     .toLowerCase()
     .replace(/^[^a-z0-9\u00c0-\u024f\u0900-\u097f]+|[^a-z0-9\u00c0-\u024f\u0900-\u097f]+$/gi, "");
 }
@@ -621,8 +664,8 @@ function collectWordsFromInlines(inlines: MarkdownInlineNode[], out: string[]): 
     } else if (node.type === "link") {
       collectWordsFromLeafText(node.label, out);
     } else if (node.type === "math") {
-      // Treat the rendered math as a single visual token
-      collectWordsFromLeafText(node.value, out);
+      const wordsSource = node.spokenText || mathExprToSpeech(node.value);
+      collectWordsFromLeafText(wordsSource, out);
     } else if (node.type === "sub" || node.type === "sup") {
       collectWordsFromInlines(node.children, out);
     } else {
@@ -753,28 +796,87 @@ export function alignMarkdownTokensToSpeech(
 /* ── Math-to-Speech Conversion ──────────────────────────────────────────────── */
 
 /**
+ * Strips LaTeX font styling commands (such as \mathcal{L} -> L, \mathbb{R} -> R, etc.),
+ * delimiter modifiers (\left, \right), and bare math wrappers across spoken text.
+ */
+export function cleanMathTextForSpokenTts(text: string): string {
+  if (!text) return "";
+  let s = text;
+
+  // Strip raw Unicode math decorator brackets (⏞, ⏟) that look like weird faces
+  s = s.replace(/[\u23de\u23df\u23dc\u23dd\u23b4\u23b5]/g, "");
+
+  // Expand squashed variable subscripts for natural speech (e.g. Hstatic -> H static, H_static -> H static, zstatic -> z static)
+  s = s.replace(
+    /\b([A-Za-z])(?:_)?(static|dynamic|total|ortho|jepa|mae|sim|loss|pred|target|init|corr|cov|var)\b/gi,
+    "$1 $2"
+  );
+  // Expand single-letter variable subscripts (e.g. x_1 -> x 1, z_1 -> z 1)
+  s = s.replace(/\b([A-Za-z])_([0-9]+)\b/g, "$1 $2");
+
+  const mathFontCommands =
+    "mathcal|mathbb|mathbf|boldsymbol|bm|mathrm|mathit|mathsf|mathtt|mathfrak|mathscr|text|textbf|textit|operatorname";
+  // 1. \mathcal{L} -> L (braced)
+  s = s.replace(new RegExp(`\\\\(?:${mathFontCommands})\\{([^}]+)\\}`, "g"), "$1");
+  // 2. \mathcal L -> L (space-separated single letter or token)
+  s = s.replace(new RegExp(`\\\\(?:${mathFontCommands})\\s+([a-zA-Z0-9])`, "g"), "$1");
+  // 3. \mathcalL -> L (direct single letter)
+  s = s.replace(new RegExp(`\\\\(?:${mathFontCommands})([a-zA-Z])`, "g"), "$1");
+  // 4. mathcal{L} -> L and mathcal L -> L (bare, in case backslash was omitted or stripped)
+  s = s.replace(new RegExp(`\\b(?:${mathFontCommands})\\{([^}]+)\\}`, "gi"), "$1");
+  s = s.replace(new RegExp(`\\b(?:${mathFontCommands})\\s+([a-zA-Z0-9])\\b`, "gi"), "$1");
+
+  // Accents: \hat{x} -> x, \bar{x} -> x, \tilde{x} -> x, \vec{x} -> x
+  s = s.replace(/\\(?:hat|bar|tilde|vec|dot|ddot|acute|grave|breve|check)\{([^}]+)\}/g, "$1");
+  s = s.replace(/\\(?:hat|bar|tilde|vec|dot|ddot|acute|grave|breve|check)\s*([a-zA-Z0-9])/g, "$1");
+
+  // Delimiters & display styles
+  s = s.replace(/\\(?:left|right)\b/g, "");
+  s = s.replace(/\\(?:[bB]igg?[lr]?)\b/g, "");
+  s = s.replace(/\\(?:displaystyle|textstyle|scriptstyle|scriptscriptstyle)\b/g, "");
+
+  // Spacing
+  s = s.replace(/\\(?:quad|qquad)\b/g, " ");
+  s = s.replace(/\\[,;:!]/g, " ");
+
+  return s;
+}
+
+/**
  * Convert a LaTeX math expression into natural spoken English for TTS engines.
  */
-function mathExprToSpeech(expr: string): string {
+export function mathExprToSpeech(expr: string): string {
   let s = expr.trim();
-  // Fractions
+  // Fractions: \frac{a}{b} -> a over b
   s = s.replace(/\\frac\{([^}]+)\}\{([^}]+)\}/g, "$1 over $2");
-  // Square root
+  // Square root: \sqrt{a} -> square root of a
   s = s.replace(/\\sqrt\{([^}]+)\}/g, "square root of $1");
+
   // Powers
   s = s.replace(/\^2(?!\w)/g, " squared");
   s = s.replace(/\^3(?!\w)/g, " cubed");
   s = s.replace(/\^\{([^}]+)\}/g, " to the power of $1");
   s = s.replace(/\^(\w)/g, " to the power of $1");
-  // Subscripts (chemical formulas like H_2O)
+
+  // Subscripts (chemical formulas like H_2O, loss function subscripts like L_{total})
   s = s.replace(/_\{([^}]+)\}/g, " $1");
   s = s.replace(/_(\w)/g, " $1");
+
+  // LaTeX font / styling wrappers: \mathcal{L} -> L, \mathbb{R} -> R, \mathbf{w} -> w, etc.
+  s = cleanMathTextForSpokenTts(s);
+
   // Greek letters
   s = s.replace(/\\alpha/g, "alpha").replace(/\\beta/g, "beta").replace(/\\gamma/g, "gamma");
   s = s.replace(/\\delta/g, "delta").replace(/\\theta/g, "theta").replace(/\\pi/g, "pi");
   s = s.replace(/\\sigma/g, "sigma").replace(/\\mu/g, "mu").replace(/\\lambda/g, "lambda");
   s = s.replace(/\\epsilon/g, "epsilon").replace(/\\omega/g, "omega").replace(/\\phi/g, "phi");
   s = s.replace(/\\rho/g, "rho").replace(/\\tau/g, "tau").replace(/\\psi/g, "psi");
+  s = s.replace(/\\eta/g, "eta").replace(/\\zeta/g, "zeta").replace(/\\kappa/g, "kappa");
+  s = s.replace(/\\chi/g, "chi").replace(/\\nu/g, "nu").replace(/\\xi/g, "xi");
+  s = s.replace(/\\Gamma/g, "Gamma").replace(/\\Delta/g, "Delta").replace(/\\Theta/g, "Theta");
+  s = s.replace(/\\Lambda/g, "Lambda").replace(/\\Sigma/g, "Sigma").replace(/\\Phi/g, "Phi");
+  s = s.replace(/\\Psi/g, "Psi").replace(/\\Omega/g, "Omega");
+
   // Operators
   s = s.replace(/\\pm/g, "plus or minus").replace(/\\mp/g, "minus or plus");
   s = s.replace(/\\approx/g, "approximately equals");
@@ -790,13 +892,58 @@ function mathExprToSpeech(expr: string): string {
   s = s.replace(/\\subset/g, "is a subset of").replace(/\\cup/g, "union").replace(/\\cap/g, "intersection");
   s = s.replace(/\\rightarrow/g, "implies").replace(/\\leftarrow/g, "is implied by");
   s = s.replace(/\\Rightarrow/g, "therefore").replace(/\\iff/g, "if and only if");
+
+  // Math functions
+  s = s.replace(/\\log/g, "log").replace(/\\ln/g, "natural log").replace(/\\exp/g, "exponential");
+  s = s.replace(/\\sin/g, "sine").replace(/\\cos/g, "cosine").replace(/\\tan/g, "tangent");
+  s = s.replace(/\\min/g, "minimum").replace(/\\max/g, "maximum");
+
   // Equals, comparisons
   s = s.replace(/=/g, " equals ").replace(/</g, " less than ").replace(/>/g, " greater than ");
-  // Clean remaining command names: \text{...}, \mathrm{...}, etc.
-  s = s.replace(/\\(?:text|mathrm|mathbf|textbf|operatorname|mathit)\{([^}]+)\}/g, "$2");
+
   // Strip remaining backslashes and braces
   s = s.replace(/[\\{}]/g, "");
   return s.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Detects math expressions followed immediately by a spoken pronunciation guide in parentheses
+ * or brackets, e.g.:
+ *   $\mathcal{L}_{total}$ (L total)  ->  L total
+ *   $$\frac{a}{b}$$ (a over b)       ->  a over b
+ * Replaces the formula and parenthetical with only the spoken pronunciation.
+ * Standalone equations (without pronunciation) are left untouched so they can be
+ * spoken naturally via mathExprToSpeech().
+ */
+export function replaceMathWithSpokenPronunciation(text: string): string {
+  if (!text) return "";
+  let s = text;
+
+  // 1. Display math: $$...$$\s*(...) or $$...$$\s*[...]
+  s = s.replace(
+    /\$\$([\s\S]*?)\$\$\s*(?:\(([^)\r\n]+)\)|\[([^\]\r\n]+)\])/g,
+    (full, _expr, parenInner, bracketInner) => {
+      const inner = (parenInner || bracketInner || "").trim();
+      if (isLikelyPronunciation(inner)) {
+        return ` ${inner} `;
+      }
+      return full;
+    }
+  );
+
+  // 2. Inline math: $...$\s*(...) or $...$\s*[...]
+  s = s.replace(
+    /\$((?:[^$\\]|\\.)+?)\$\s*(?:\(([^)\r\n]+)\)|\[([^\]\r\n]+)\])/g,
+    (full, _expr, parenInner, bracketInner) => {
+      const inner = (parenInner || bracketInner || "").trim();
+      if (isLikelyPronunciation(inner)) {
+        return ` ${inner} `;
+      }
+      return full;
+    }
+  );
+
+  return s;
 }
 
 /**
@@ -805,13 +952,16 @@ function mathExprToSpeech(expr: string): string {
  * For ElevenLabs: use convertMathToSpokenTextKeepCues instead (keeps [laughs] etc. for native synthesis).
  */
 export function convertMathToSpokenText(text: string): string {
-  let spoken = text;
+  // 1. Replace math equations with adjacent spoken pronunciations
+  let spoken = replaceMathWithSpokenPronunciation(text);
   // Strip audio cue tags completely for browser speech
   spoken = spoken.replace(/\[(laughs|sighs|excited|whispers|gasps|pauses)\]/gi, "");
-  // Display math blocks $$...$$
+  // Display math blocks $$...$$ (for standalone equations without adjacent pronunciation)
   spoken = spoken.replace(/\$\$([\s\S]*?)\$\$/g, (_, expr) => mathExprToSpeech(expr));
-  // Inline math $...$
+  // Inline math $...$ (for standalone equations without adjacent pronunciation)
   spoken = spoken.replace(/\$(.*?)\$/g, (_, expr) => mathExprToSpeech(expr));
+  // Clean any remaining bare LaTeX / mathcal commands outside $...$
+  spoken = cleanMathTextForSpokenTts(spoken);
   return spoken.replace(/\s{2,}/g, " ").trim();
 }
 
@@ -820,10 +970,13 @@ export function convertMathToSpokenText(text: string): string {
  * Used for ElevenLabs AI Voice which natively synthesizes [laughs], [sighs], etc.
  */
 export function convertMathToSpokenTextKeepCues(text: string): string {
-  let spoken = text;
-  // Display math blocks $$...$$
+  // 1. Replace math equations with adjacent spoken pronunciations
+  let spoken = replaceMathWithSpokenPronunciation(text);
+  // Display math blocks $$...$$ (for standalone equations without adjacent pronunciation)
   spoken = spoken.replace(/\$\$([\s\S]*?)\$\$/g, (_, expr) => mathExprToSpeech(expr));
-  // Inline math $...$
+  // Inline math $...$ (for standalone equations without adjacent pronunciation)
   spoken = spoken.replace(/\$(.*?)\$/g, (_, expr) => mathExprToSpeech(expr));
+  // Clean any remaining bare LaTeX / mathcal commands outside $...$
+  spoken = cleanMathTextForSpokenTts(spoken);
   return spoken.replace(/\s{2,}/g, " ").trim();
 }

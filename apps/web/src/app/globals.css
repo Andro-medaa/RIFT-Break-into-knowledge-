@@ -483,3 +483,26 @@ code, pre {
   animation: rift-input-voice-glow 2.2s ease-in-out infinite;
 }
 
+/* ── Responsive Root Container ────────────────────────────────────────────── */
+
+.rift-root-container {
+  height: 100%;
+  width: 100%;
+  display: flex;
+  gap: 18px;
+  padding: 16px;
+  background: transparent;
+  overflow: hidden;
+  min-height: 0;
+  min-width: 0;
+}
+
+@media (max-width: 767px) {
+  .rift-root-container {
+    gap: 8px;
+    padding: 8px;
+    flex-direction: column;
+  }
+}
+
+

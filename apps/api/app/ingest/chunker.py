@@ -23,6 +23,9 @@ class DocumentChunkData:
     image_url: Optional[str] = None
     image_bytes: Optional[bytes] = None
     image_ext: Optional[str] = None
+    ocr_text: Optional[str] = None
+    caption: Optional[str] = None
+    figure_label: Optional[str] = None
     table_markdown: Optional[str] = None
     token_count: int = 0
 
@@ -48,8 +51,12 @@ class SemanticChunker:
                     page_number=elem.page_number,
                     bbox=elem.bbox,
                     section_path=elem.section_path,
+                    image_url=elem.image_url,
                     image_bytes=elem.image_bytes,
                     image_ext=elem.image_ext,
+                    ocr_text=elem.ocr_text,
+                    caption=elem.caption,
+                    figure_label=elem.figure_label,
                     table_markdown=elem.table_markdown,
                     token_count=elem.token_count,
                 )

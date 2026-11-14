@@ -1,5 +1,6 @@
 """End-to-end ingestion pipeline service for multimodal semantic RAG."""
 
+import base64
 import uuid
 from typing import Any, Optional
 import httpx
@@ -47,25 +48,55 @@ class IngestionService:
         for idx, elem in enumerate(elements):
             if elem.element_type == "image" and elem.image_bytes:
                 try:
-                    # Upload image crop to Supabase Storage
-                    client = storage_service._get_client()
-                    img_path = f"{owner_id}/images/{document_id}_p{elem.page_number}_{idx}.{elem.image_ext or 'png'}"
                     mime = f"image/{elem.image_ext or 'png'}"
-                    client.storage.from_(storage_service.bucket_name).upload(
-                        path=img_path,
-                        file=elem.image_bytes,
-                        file_options={"content-type": mime, "upsert": "true"},
-                    )
-                    image_url = client.storage.from_(
-                        storage_service.bucket_name
-                    ).get_public_url(img_path)
-                    elem.image_ext = image_url  # temporarily attach URL
+                    image_url = None
 
-                    # Vision captioning
-                    caption = await embedding_service.caption_image(elem.image_bytes, mime_type=mime)
-                    elem.content = f"[Figure on Page {elem.page_number}]: {caption}"
+                    # Upload image crop to Supabase Storage if possible
+                    try:
+                        client = storage_service._get_client()
+                        img_path = f"{owner_id}/images/{document_id}_p{elem.page_number}_{idx}.{elem.image_ext or 'png'}"
+                        client.storage.from_(storage_service.bucket_name).upload(
+                            path=img_path,
+                            file=elem.image_bytes,
+                            file_options={"content-type": mime, "upsert": "true"},
+                        )
+                        image_url = client.storage.from_(
+                            storage_service.bucket_name
+                        ).get_public_url(img_path)
+                    except Exception as upload_err:
+                        logger.warning(f"Storage upload failed for image {idx}, using base64: {upload_err}")
+
+                    # Fallback to base64 data URI if storage URL is not available
+                    if not image_url:
+                        b64_data = base64.b64encode(elem.image_bytes).decode("ascii")
+                        image_url = f"data:{mime};base64,{b64_data}"
+
+                    elem.image_url = image_url
+
+                    # Vision multimodal analysis (OCR text + deep captioning + figure label)
+                    surrounding = ""
+                    if idx > 0 and elements[idx - 1].content:
+                        surrounding += elements[idx - 1].content[:200]
+                    if idx + 1 < len(elements) and elements[idx + 1].content:
+                        surrounding += " " + elements[idx + 1].content[:200]
+
+                    analysis = await embedding_service.analyze_image(
+                        elem.image_bytes,
+                        mime_type=mime,
+                        page_number=elem.page_number,
+                        surrounding_text=surrounding,
+                    )
+                    elem.caption = analysis.get("caption", "")
+                    elem.ocr_text = analysis.get("ocr_text", "")
+                    elem.figure_label = analysis.get("figure_label", f"Figure on Page {elem.page_number}")
+
+                    # Format content for vector embedding and retrieval
+                    label_str = elem.figure_label or f"Figure on Page {elem.page_number}"
+                    elem.content = f"[{label_str}]: {elem.caption}"
+                    if elem.ocr_text:
+                        elem.content += f"\nVisual Labels & Text: {elem.ocr_text}"
                 except Exception as img_err:
-                    logger.warning(f"Failed to upload or caption image {idx}: {img_err}")
+                    logger.warning(f"Failed to process or caption image {idx}: {img_err}")
 
         # 5. Semantic Chunking
         chunks = semantic_chunker.chunk_elements(elements)
@@ -101,7 +132,7 @@ class IngestionService:
                         "page_number": c.page_number,
                         "bbox": c.bbox,
                         "section_path": c.section_path,
-                        "image_url": c.image_bytes if isinstance(c.image_bytes, str) else None,
+                        "image_url": c.image_url,
                         "table_markdown": c.table_markdown,
                         "token_count": c.token_count,
                         "embedding": emb,
@@ -189,6 +220,44 @@ class IngestionService:
                         "table_markdown": None,
                     })
                     chunk_idx += 1
+
+                # Extract page figures/images
+                try:
+                    pw = page.rect.width or 1.0
+                    ph = page.rect.height or 1.0
+                    for img_info in page.get_images(full=True):
+                        xref = img_info[0]
+                        rects = page.get_image_rects(xref)
+                        for rect in rects:
+                            norm_bbox = {
+                                "x": round(rect.x0 / pw, 4),
+                                "y": round(rect.y0 / ph, 4),
+                                "w": round(rect.width / pw, 4),
+                                "h": round(rect.height / ph, 4),
+                            }
+                            data_url = None
+                            try:
+                                base_img = pdf_doc.extract_image(xref)
+                                img_bytes = base_img.get("image")
+                                img_ext = base_img.get("ext", "png")
+                                if img_bytes:
+                                    data_url = f"data:image/{img_ext};base64,{base64.b64encode(img_bytes).decode('ascii')}"
+                            except Exception:
+                                pass
+                            fallback_chunks.append({
+                                "id": f"chunk-{page_num}-{chunk_idx}",
+                                "chunk_index": chunk_idx,
+                                "chunk_type": "image",
+                                "content": f"[Figure on Page {page_num}]",
+                                "page_number": page_num,
+                                "bbox": norm_bbox,
+                                "section_path": [f"Page {page_num}", "Figures"],
+                                "image_url": data_url,
+                                "table_markdown": None,
+                            })
+                            chunk_idx += 1
+                except Exception as img_ext_err:
+                    logger.warning(f"Fallback image extraction warning on page {page_num}: {img_ext_err}")
             logger.info(f"Generated {len(fallback_chunks)} fallback chunks from PDF for doc={document_id}")
             return fallback_chunks
         except Exception as fb_err:

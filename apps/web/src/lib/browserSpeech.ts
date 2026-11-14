@@ -1,17 +1,16 @@
 /**
  * Web Speech API (SpeechSynthesis) controller with synchronized word-level highlighting.
  *
- * Follows W3C / MDN SpeechSynthesisUtterance specification:
- * - Retains active utterance in an instance field to avoid Chromium V8 GC dropping events.
- * - Prefers local voices (localService === true) which emit native `boundary` word events.
- * - Filters `boundary` events by `event.name` (ignoring `"sentence"` boundaries) and handles
- *   missing/zero `event.charLength` via precomputed UTF-16 token offsets.
- * - Detaches event handlers before `speechSynthesis.cancel()` so prior `canceled` errors never
- *   clobber a newly started utterance.
- * - Automatically falls back to rate-calibrated word timing if a remote/cloud voice emits no
- *   native `boundary` event within 320ms of `onstart`.
- * - Splits long passages (> 240 chars) at sentence boundaries while keeping continuous word indices
- *   to avoid Chromium's ~15-second long-utterance cutoff.
+ * Robust Chromium & Desktop engine protections:
+ * - Retains all active SpeechSynthesisUtterance objects on a global window set to prevent
+ *   Chromium V8 GC from collecting the utterance mid-speech (Chromium Bug 679437 / 404847).
+ * - Implements a 7-second pause/resume heartbeat pulse to prevent Chromium's native ~15-second
+ *   speech cutoff.
+ * - Safely schedules sub-chunk transitions asynchronously via setTimeout(..., 60) so Chromium's
+ *   audio stream does not deadlock or drop subsequent utterances on synchronous onend.
+ * - Differentiates fatal synthesis errors from benign "interrupted" or "canceled" events.
+ * - Prefers local voices (localService === true) matching language for reliable word boundaries,
+ *   with calibrated fallback timing if no boundary events arrive.
  */
 
 import { markdownToSpeechText } from "./markdownSpeech";
@@ -129,7 +128,7 @@ function buildSpeechChunks(
 
   const sliced = tokens.slice(start);
   const fullJoined = sliced.map((t) => t.word).join(" ");
-  if (fullJoined.length <= 240) {
+  if (fullJoined.length <= 450) {
     return [
       {
         text: fullJoined,
@@ -162,13 +161,13 @@ function buildSpeechChunks(
     const nextLen = batchLen === 0 ? w.length : batchLen + 1 + w.length;
     const endsSentence = /[.!?…;:\n]$/.test(w);
 
-    if (batchWords.length > 0 && nextLen > 220) {
+    if (batchWords.length > 0 && nextLen > 380) {
       flushBatch();
     }
     batchWords.push(w);
     batchLen = batchWords.length === 1 ? w.length : batchLen + 1 + w.length;
 
-    if (endsSentence && batchLen >= 90) {
+    if (endsSentence && batchLen >= 250) {
       flushBatch();
     }
   }
@@ -196,12 +195,13 @@ export function selectBoundaryFriendlyVoice(
   const baseLang = targetLower.split("-")[0];
 
   return (
+    voices.find((v) => v.localService && v.lang.toLowerCase().startsWith(baseLang) && v.default) ||
     voices.find((v) => v.localService && v.lang.toLowerCase() === targetLower) ||
     voices.find((v) => v.localService && v.lang.toLowerCase().startsWith(baseLang)) ||
-    voices.find((v) => v.localService && v.default) ||
     preferredVoice ||
     voices.find((v) => v.lang.toLowerCase() === targetLower) ||
     voices.find((v) => v.lang.toLowerCase().startsWith(baseLang)) ||
+    voices.find((v) => v.default) ||
     null
   );
 }
@@ -216,12 +216,42 @@ function estimateWordDurationMs(word: string, rate: number): number {
 }
 
 /**
+ * Global set of active SpeechSynthesisUtterance objects pinned to `window` to prevent
+ * Chromium V8 GC from collecting utterances mid-speech (Chromium Bug 679437 / 404847).
+ */
+function pinActiveUtterance(u: SpeechSynthesisUtterance): void {
+  if (typeof window === "undefined") return;
+  const win = window as any;
+  if (!win.__RIFT_ACTIVE_UTTERANCES__) {
+    win.__RIFT_ACTIVE_UTTERANCES__ = new Set<SpeechSynthesisUtterance>();
+  }
+  win.__RIFT_ACTIVE_UTTERANCES__.add(u);
+}
+
+function unpinActiveUtterance(u: SpeechSynthesisUtterance | null): void {
+  if (typeof window === "undefined" || !u) return;
+  const win = window as any;
+  if (win.__RIFT_ACTIVE_UTTERANCES__) {
+    win.__RIFT_ACTIVE_UTTERANCES__.delete(u);
+  }
+}
+
+function clearAllPinnedUtterances(): void {
+  if (typeof window === "undefined") return;
+  const win = window as any;
+  if (win.__RIFT_ACTIVE_UTTERANCES__) {
+    win.__RIFT_ACTIVE_UTTERANCES__.clear();
+  }
+}
+
+/**
  * Hard-cancels any active or queued speech in the browser's SpeechSynthesis engine.
  * Handles Chromium bug where cancel() is silently ignored if the engine is in a paused state.
  */
 export function cancelAllBrowserSpeech(): void {
   if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
   try {
+    clearAllPinnedUtterances();
     if (window.speechSynthesis.paused) {
       window.speechSynthesis.resume();
     }
@@ -234,6 +264,8 @@ export class BrowserSpeechController {
   private activeUtterance: SpeechSynthesisUtterance | null = null;
   private graceTimer: ReturnType<typeof setTimeout> | null = null;
   private stepTimer: ReturnType<typeof setTimeout> | null = null;
+  private chunkTransitionTimer: ReturnType<typeof setTimeout> | null = null;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private paused = false;
   private resumeStepFn: (() => void) | null = null;
   private pendingFallbackFn: (() => void) | null = null;
@@ -250,10 +282,37 @@ export class BrowserSpeechController {
       clearTimeout(this.stepTimer);
       this.stepTimer = null;
     }
+    if (this.chunkTransitionTimer) {
+      clearTimeout(this.chunkTransitionTimer);
+      this.chunkTransitionTimer = null;
+    }
+    this.stopHeartbeat();
+  }
+
+  private startHeartbeat() {
+    this.stopHeartbeat();
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    this.heartbeatTimer = setInterval(() => {
+      try {
+        const synth = window.speechSynthesis;
+        if (synth && synth.speaking && !synth.paused) {
+          synth.pause();
+          synth.resume();
+        }
+      } catch {}
+    }, 7000);
+  }
+
+  private stopHeartbeat() {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
   }
 
   private detachActiveUtterance() {
     if (!this.activeUtterance) return;
+    unpinActiveUtterance(this.activeUtterance);
     this.activeUtterance.onstart = null;
     this.activeUtterance.onboundary = null;
     this.activeUtterance.onend = null;
@@ -297,6 +356,8 @@ export class BrowserSpeechController {
         synth.resume();
       }
     } catch {}
+
+    this.startHeartbeat();
 
     // Recover gracefully if browser speech engine silently dropped the paused utterance.
     if (!synth.speaking && !synth.paused && this.activeOptions) {
@@ -372,6 +433,7 @@ export class BrowserSpeechController {
       }
 
       this.clearTimers();
+      this.detachActiveUtterance();
       this.resumeStepFn = null;
       this.pendingFallbackFn = null;
 
@@ -381,8 +443,11 @@ export class BrowserSpeechController {
       if (voice) {
         utterance.voice = voice;
       }
-      // Retain strong reference on controller so Chromium V8 does not GC mid-speech
+
+      // Retain strong reference on controller instance AND globally on window
+      // so Chromium V8 GC never destroys the C++ wrapper mid-speech.
       this.activeUtterance = utterance;
+      pinActiveUtterance(utterance);
 
       let localFallbackIdx = 0;
 
@@ -411,6 +476,7 @@ export class BrowserSpeechController {
 
       utterance.onstart = () => {
         if (currentSession !== this.sessionId) return;
+        this.startHeartbeat();
         if (!startedNotified) {
           startedNotified = true;
           callbacks?.onStart?.();
@@ -443,6 +509,7 @@ export class BrowserSpeechController {
         if (!this.nativeBoundaryConfirmed) {
           this.nativeBoundaryConfirmed = true;
           this.clearTimers();
+          this.startHeartbeat();
           this.resumeStepFn = null;
           this.pendingFallbackFn = null;
         }
@@ -460,12 +527,19 @@ export class BrowserSpeechController {
       };
 
       utterance.onend = () => {
+        unpinActiveUtterance(utterance);
         if (currentSession !== this.sessionId) return;
         this.clearTimers();
         this.resumeStepFn = null;
         this.pendingFallbackFn = null;
+
         if (chunkIdx + 1 < chunks.length) {
-          speakChunk(chunkIdx + 1);
+          // Asynchronously advance to next chunk with safety delay to prevent Chromium audio session locking
+          this.chunkTransitionTimer = setTimeout(() => {
+            if (currentSession === this.sessionId) {
+              speakChunk(chunkIdx + 1);
+            }
+          }, 60);
         } else {
           this.activeUtterance = null;
           this.activeOptions = null;
@@ -474,12 +548,21 @@ export class BrowserSpeechController {
         }
       };
 
-      utterance.onerror = () => {
+      utterance.onerror = (event: SpeechSynthesisErrorEvent) => {
+        unpinActiveUtterance(utterance);
         if (currentSession !== this.sessionId) return;
         this.clearTimers();
         this.resumeStepFn = null;
         this.pendingFallbackFn = null;
         this.activeUtterance = null;
+
+        // "interrupted" or "canceled" errors occur on pause, manual skip, or harmless
+        // audio focus switches. Do NOT treat them as fatal playback errors!
+        const errType = (event as any)?.error;
+        if (errType === "interrupted" || errType === "canceled") {
+          return;
+        }
+
         this.activeOptions = null;
         callbacks?.onWordChange?.(-1);
         callbacks?.onError?.();
