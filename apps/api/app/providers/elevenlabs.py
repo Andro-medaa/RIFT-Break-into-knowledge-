@@ -13,33 +13,65 @@ from app.core.logger import get_logger
 
 logger = get_logger("app.providers.elevenlabs")
 
-DEFAULT_VOICE_ID = "pNInz6obpgDQGcFmaJgB"  # Adam (Warm & Deep Narrator)
+DEFAULT_VOICE_ID = "hpp4J3VqNfWAUOO0d1Us"  # Bella (Soft & Gentle)
 DEFAULT_MODEL_ID = "eleven_multilingual_v2"
 
 PRESET_VOICES = [
     {
-        "voice_id": "pNInz6obpgDQGcFmaJgB",
-        "name": "Adam",
-        "description": "Deep, Grounded & Clear",
+        "voice_id": "hpp4J3VqNfWAUOO0d1Us",
+        "name": "Bella",
+        "description": "Female (Soft & Gentle)",
         "category": "premade",
+        "preview_url": "https://storage.googleapis.com/eleven-public-prod/premade/voices/hpp4J3VqNfWAUOO0d1Us/dab0f5ba-3aa4-48a8-9fad-f138fea1126d.mp3",
     },
     {
         "voice_id": "EXAVITQu4vr4xnSDxMaL",
-        "name": "Bella",
-        "description": "Soft, Expressive & Gentle",
+        "name": "Sarah",
+        "description": "Female (Soft & Expressive)",
         "category": "premade",
+        "preview_url": "https://storage.googleapis.com/eleven-public-prod/premade/voices/EXAVITQu4vr4xnSDxMaL/01a3e33c-6e99-4ee7-8543-ff2216a32186.mp3",
     },
     {
-        "voice_id": "tSVwqkJGEKjLklhiN0Nx",
-        "name": "Viraj",
-        "description": "Rich, Engaging Narrator",
+        "voice_id": "pFZP5JQG7iQjIQuC4Bku",
+        "name": "Lily",
+        "description": "Female (Velvety Actress, British)",
         "category": "premade",
+        "preview_url": "https://storage.googleapis.com/eleven-public-prod/premade/voices/pFZP5JQG7iQjIQuC4Bku/89b68b35-b3dd-4348-a84a-a3c13a3c2b30.mp3",
     },
     {
-        "voice_id": "m4hBEimiy2ffkQ0hHMVD",
-        "name": "Katie",
-        "description": "Authentic, Clear & Friendly",
+        "voice_id": "cgSgspJ2msm6clMCkdW9",
+        "name": "Jessica",
+        "description": "Female (Playful, Bright & Warm)",
         "category": "premade",
+        "preview_url": "https://storage.googleapis.com/eleven-public-prod/premade/voices/cgSgspJ2msm6clMCkdW9/56a97bf8-b69b-448f-846c-c3a11683d45a.mp3",
+    },
+    {
+        "voice_id": "pNInz6obpgDQGcFmaJgB",
+        "name": "Adam",
+        "description": "Male (Deep & Grounded)",
+        "category": "premade",
+        "preview_url": "https://storage.googleapis.com/eleven-public-prod/premade/voices/pNInz6obpgDQGcFmaJgB/d6905d7a-dd26-4187-bfff-1bd3a5ea7cac.mp3",
+    },
+    {
+        "voice_id": "bIHbv24MWmeRgasZH58o",
+        "name": "Will",
+        "description": "Male (Relaxed Optimist)",
+        "category": "premade",
+        "preview_url": "https://storage.googleapis.com/eleven-public-prod/premade/voices/bIHbv24MWmeRgasZH58o/8caf8f3d-ad29-4980-af41-53f20c72d7a4.mp3",
+    },
+    {
+        "voice_id": "SOYHLrjzK2X1ezoPC6cr",
+        "name": "Harry",
+        "description": "Male (Fierce & Character)",
+        "category": "premade",
+        "preview_url": "https://storage.googleapis.com/eleven-public-prod/premade/voices/SOYHLrjzK2X1ezoPC6cr/86d178f6-f4b6-4e0e-85be-3de19f490794.mp3",
+    },
+    {
+        "voice_id": "cjVigY5qzO86Huf0OWal",
+        "name": "Eric",
+        "description": "Male (Smooth & Trustworthy)",
+        "category": "premade",
+        "preview_url": "https://storage.googleapis.com/eleven-public-prod/premade/voices/cjVigY5qzO86Huf0OWal/d098fda0-6456-4030-b3d8-63aa048c9070.mp3",
     },
 ]
 
@@ -115,19 +147,26 @@ class ElevenLabsProvider:
                 )
                 if res.status_code == 200:
                     data = res.json()
-                    voices = [
-                        {
-                            "voice_id": v["voice_id"],
-                            "name": v.get("name", "Unnamed"),
-                            "description": v.get("description") or v.get("category", "Voice"),
-                            "category": v.get("category", "general"),
-                            "preview_url": v.get("preview_url"),
-                        }
-                        for v in data.get("voices", [])
-                    ]
-                    self._cached_voices = voices
+                    api_voices = data.get("voices", [])
+                    seen_ids = set()
+                    merged = []
+                    for pv in PRESET_VOICES:
+                        seen_ids.add(pv["voice_id"])
+                        merged.append(pv)
+                    for v in api_voices:
+                        vid = v.get("voice_id")
+                        if vid and vid not in seen_ids:
+                            seen_ids.add(vid)
+                            merged.append({
+                                "voice_id": vid,
+                                "name": v.get("name", "Unnamed"),
+                                "description": v.get("description") or v.get("category", "Voice"),
+                                "category": v.get("category", "general"),
+                                "preview_url": v.get("preview_url"),
+                            })
+                    self._cached_voices = merged
                     self._voices_cached_at = now
-                    return voices
+                    return merged
         except Exception as e:
             logger.warning(f"Error fetching ElevenLabs voices: {e}")
 

@@ -1,5 +1,6 @@
 """RAG query and citation service using Supabase pgvector hybrid search and Gemini."""
 
+import base64
 import re
 from typing import Any, Optional
 from google import genai
@@ -133,7 +134,11 @@ def build_rag_prompts(
         "- For complex equations (fractions, integrals, matrices), use proper LaTeX commands: "
         "`\\frac{}{}`, `\\int`, `\\sum`, `\\sqrt{}`, etc.\n"
         "- Keep surrounding text natural and readable — the LaTeX is for visual rendering, "
-        "while the surrounding words should make the meaning clear when read aloud."
+        "while the surrounding words should make the meaning clear when read aloud.\n\n"
+        "6. FIGURES, DIAGRAMS & VISUAL CONTENT:\n"
+        "- Sources labeled as `Figure` or `Figure / Diagram` contain multimodal descriptions, OCR text labels, and visual captions of diagrams, graphs, flowcharts, architectures, and images in the PDF.\n"
+        "- When answering questions about visual elements, figures, diagrams, flowcharts, system architectures, or plots, explain them clearly using the extracted visual labels and captions.\n"
+        "- Cite the corresponding figure source directly inline using its `[N]` citation bracket (e.g. `as shown in the architecture diagram on Page 2 [1]`)."
         f"{web_tool_section}"
     )
 
@@ -152,9 +157,17 @@ def build_pdf_citations(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for idx, chk in enumerate(chunks):
         page = chk.get("page_number", 1)
         chunk_type = chk.get("chunk_type", "text")
-        label = f"Page {page} · {str(chunk_type).capitalize()}"
+        is_figure = chunk_type in ("image", "figure", "diagram") or bool(chk.get("image_url"))
+        if is_figure:
+            label = f"Page {page} · Figure"
+        else:
+            label = f"Page {page} · {str(chunk_type).capitalize()}"
         if chk.get("section_path") and len(chk["section_path"]) > 0:
-            label = f"Page {page} · {str(chk['section_path'][0])[:24]}"
+            sec_0 = str(chk["section_path"][0])
+            if is_figure and sec_0 in ("Figures", f"Page {page}"):
+                label = f"Page {page} · Figure"
+            else:
+                label = f"Page {page} · {sec_0[:24]}"
 
         raw_bbox = chk.get("bbox")
         clean_bbox = None
@@ -364,10 +377,11 @@ class RAGService:
                 chunks.append({
                     "id": p.get("id"),
                     "page_number": page_num,
-                    "chunk_type": "text",
-                    "content": p.get("text", ""),
+                    "chunk_type": p.get("chunkType") or p.get("chunk_type") or "text",
+                    "content": p.get("text", "") or p.get("content", ""),
                     "bbox": bbox_data,
-                    "section_path": [f"Page {page_num}"],
+                    "section_path": p.get("section_path") or [f"Page {page_num}"],
+                    "image_url": p.get("imageUrl") or p.get("image_url"),
                 })
 
         # 3. If STILL no chunks, autonomously extract blocks and bounding boxes directly from the PDF via PyMuPDF
@@ -470,6 +484,41 @@ class RAGService:
                         "bbox": bbox,
                         "section_path": [f"Page {page_num}"],
                     })
+
+                # Extract images on this page
+                try:
+                    pw = page.rect.width or 1.0
+                    ph = page.rect.height or 1.0
+                    for img_info in page.get_images(full=True):
+                        xref = img_info[0]
+                        rects = page.get_image_rects(xref)
+                        for rect in rects:
+                            norm_bbox = {
+                                "x": round(rect.x0 / pw, 4),
+                                "y": round(rect.y0 / ph, 4),
+                                "w": round(rect.width / pw, 4),
+                                "h": round(rect.height / ph, 4),
+                            }
+                            data_url = None
+                            try:
+                                base_img = pdf_doc.extract_image(xref)
+                                img_bytes = base_img.get("image")
+                                img_ext = base_img.get("ext", "png")
+                                if img_bytes:
+                                    data_url = f"data:image/{img_ext};base64,{base64.b64encode(img_bytes).decode('ascii')}"
+                            except Exception:
+                                pass
+                            all_blocks.append({
+                                "id": f"pdf-{page_num}-img-{xref}",
+                                "page_number": page_num,
+                                "chunk_type": "image",
+                                "content": f"[Figure / Diagram on Page {page_num}]",
+                                "bbox": norm_bbox,
+                                "section_path": [f"Page {page_num}", "Figures"],
+                                "image_url": data_url,
+                            })
+                except Exception as img_err:
+                    logger.warning(f"RAG fallback image extraction warning: {img_err}")
 
             if not all_blocks:
                 return []
@@ -756,7 +805,9 @@ class RAGService:
 
         context_blocks = []
         for i, c in enumerate(chunks):
-            src = f"[Source {i+1}] (PDF Page {c.get('page_number', 1)} · {c.get('chunk_type', 'text')}):"
+            c_type = c.get("chunk_type", "text")
+            type_label = "Figure / Diagram" if (c_type in ("image", "figure", "diagram") or c.get("image_url")) else c_type
+            src = f"[Source {i+1}] (PDF Page {c.get('page_number', 1)} · {type_label}):"
             text_body = c.get("parent_content") or c.get("content", "")
             context_blocks.append(f"{src}\n{text_body}")
 

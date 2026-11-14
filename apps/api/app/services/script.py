@@ -68,12 +68,141 @@ def _clean_json_text(raw_text: str) -> str:
     elif cleaned.startswith("```"):
         cleaned = re.sub(r"^```[a-zA-Z]*\s*", "", cleaned)
         cleaned = re.sub(r"\s*```$", "", cleaned)
-    # Sanitize LaTeX backslashes inside JSON string literals:
-    # 1. Escape \ followed by (b|f|n|r|t) followed by an alpha char (e.g. \frac, \beta, \theta, \times, \rho)
-    cleaned = re.sub(r'\\([bfnrt])(?=[a-zA-Z])', r'\\\\\1', cleaned)
-    # 2. Escape any \ not followed by valid JSON escape chars (", \, /, b, f, n, r, t, u[0-9a-fA-F]{4})
-    cleaned = re.sub(r'\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})', r'\\\\', cleaned)
+
+    result: list[str] = []
+    i = 0
+    n = len(cleaned)
+    in_string = False
+
+    while i < n:
+        char = cleaned[i]
+
+        if not in_string:
+            if char == '"':
+                in_string = True
+            result.append(char)
+            i += 1
+            continue
+
+        # Inside JSON string literal
+        if char == '"':
+            in_string = False
+            result.append(char)
+            i += 1
+            continue
+
+        # Normalize unescaped raw newlines / tabs inside JSON string
+        if char == '\n':
+            result.append(r'\n')
+            i += 1
+            continue
+        if char == '\r':
+            result.append(r'\r')
+            i += 1
+            continue
+        if char == '\t':
+            result.append(r'\t')
+            i += 1
+            continue
+
+        if char == '\\':
+            if i + 1 >= n:
+                result.append('\\\\')
+                i += 1
+                continue
+
+            next_char = cleaned[i + 1]
+
+            if next_char == '\\':
+                # Already an escaped backslash `\\`
+                result.append('\\\\')
+                i += 2
+                continue
+
+            if next_char == '"':
+                # Escaped quote `\"`
+                result.append('\\"')
+                i += 2
+                continue
+
+            if next_char == '/':
+                result.append('\\/')
+                i += 2
+                continue
+
+            if next_char == 'u':
+                hex_part = cleaned[i + 2 : i + 6]
+                if len(hex_part) == 4 and all(c in "0123456789abcdefABCDEF" for c in hex_part):
+                    result.append('\\u' + hex_part)
+                    i += 6
+                    continue
+                else:
+                    # Non-unicode escape (e.g. \underbrace, \uparrow, \underline)
+                    result.append('\\\\u')
+                    i += 2
+                    continue
+
+            if next_char in 'bfnrt':
+                if i + 2 < n and cleaned[i + 2].isalpha():
+                    # LaTeX command starting with [bfnrt] followed by alpha (e.g. \frac, \beta, \theta, \times, \rho, \nabla, \tau, \nu)
+                    result.append('\\\\' + next_char)
+                    i += 2
+                    continue
+                else:
+                    # Valid JSON control escape (\n, \t, etc.)
+                    result.append('\\' + next_char)
+                    i += 2
+                    continue
+
+            # Any other character (e.g. \alpha, \mathcal, \ , \{, \}, \_, \1, \+)
+            result.append('\\\\' + next_char)
+            i += 2
+            continue
+
+        result.append(char)
+        i += 1
+
+    cleaned = "".join(result)
+    # Strip trailing commas before closing braces/brackets
+    cleaned = re.sub(r",\s*([\]}])", r"\1", cleaned)
     return cleaned.strip()
+
+
+def _extract_json_objects(text: str) -> list[dict[str, Any]]:
+    """Fallback extractor that extracts valid JSON objects when outer brackets are missing or truncated."""
+    objs: list[dict[str, Any]] = []
+    depth = 0
+    start = -1
+    in_str = False
+    escape = False
+
+    for i, ch in enumerate(text):
+        if escape:
+            escape = False
+            continue
+        if ch == '\\':
+            escape = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if not in_str:
+            if ch == '{':
+                if depth == 0:
+                    start = i
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0 and start != -1:
+                    candidate = text[start : i + 1]
+                    try:
+                        parsed = json.loads(candidate)
+                        if isinstance(parsed, dict):
+                            objs.append(parsed)
+                    except Exception:
+                        pass
+                    start = -1
+    return objs
 
 
 def _parse_json_safely(raw_text: str) -> Any:
@@ -82,19 +211,27 @@ def _parse_json_safely(raw_text: str) -> Any:
     try:
         return json.loads(cleaned)
     except Exception:
-        arr_match = re.search(r"(\[[\s\S]*\])", cleaned)
-        if arr_match:
-            try:
-                return json.loads(arr_match.group(1))
-            except Exception:
-                pass
-        obj_match = re.search(r"(\{[\s\S]*\})", cleaned)
-        if obj_match:
-            try:
-                return json.loads(obj_match.group(1))
-            except Exception:
-                pass
-        raise
+        pass
+
+    arr_match = re.search(r"(\[[\s\S]*\])", cleaned)
+    if arr_match:
+        try:
+            return json.loads(arr_match.group(1))
+        except Exception:
+            pass
+
+    extracted = _extract_json_objects(cleaned)
+    if extracted:
+        return extracted
+
+    obj_match = re.search(r"(\{[\s\S]*\})", cleaned)
+    if obj_match:
+        try:
+            return json.loads(obj_match.group(1))
+        except Exception:
+            pass
+
+    raise ValueError(f"Could not parse valid JSON from LLM output: {cleaned[:180]}...")
 
 
 def _extract_page_filters(instruction: str) -> set[int]:
@@ -418,6 +555,7 @@ class ScriptService:
                 "chunk_id": c["id"],
                 "doc_index": idx,
                 "page": c.get("page_number", 1),
+                "type": c.get("chunk_type", "text"),
                 "section": self._extract_heading(c),
                 "text": (c.get("content") or "")[:max_preview],
             }
@@ -461,7 +599,7 @@ class ScriptService:
             if not raw:
                 return self._heuristic_plan_for_instruction(text_chunks, instruction)
 
-            parsed = json.loads(_clean_json_text(raw))
+            parsed = _parse_json_safely(raw)
             tone_notes = instruction
             raw_items: list[Any] = []
             if isinstance(parsed, dict):
@@ -532,6 +670,8 @@ class ScriptService:
                         page_number=c.get("page_number", 1),
                         bbox=c.get("bbox"),
                         chapter_heading=heading if s_idx == 0 else None,
+                        chunk_type=c.get("chunk_type", "text"),
+                        image_url=c.get("image_url"),
                     )
                 )
         return segments
@@ -589,6 +729,7 @@ class ScriptService:
                     {
                         "chunk_id": item.chunk_id,
                         "page": c.get("page_number", 1),
+                        "type": c.get("chunk_type", "text"),
                         "section": item.chapter_heading or self._extract_heading(c),
                         "role": item.role,
                         "bridge_note": item.bridge_note,
@@ -621,9 +762,13 @@ class ScriptService:
                 "   - You MUST identify all mathematical expressions, variables, and formulas and output them in standard LaTeX with natural spoken pronunciations immediately after in parentheses: e.g. '$H_{static}$ (H static)', '$H(k, t)$ (H of k and t)', '$z_{dynamic}$ (z dynamic)', '$L_{ortho}$ (L ortho)'.\n"
                 "   - NEVER output raw unformatted variable names like 'Hstatic' or 'Hdynamic'.\n"
                 "   - Cleanly omit visual PDF diagram artifacts such as overbrace and underbrace characters (⏞, ⏟) and instead explain the equation naturally.\n"
-                "8. For chemical formulas like H2O, CO2, write as `$H_2O$ (H 2 O)`, `$CO_2$ (C O 2)` in the script.\n"
+                "8. FOR FIGURES, DIAGRAMS & IMAGES (type='image' or content begins with [Figure ...]):\n"
+                "   - Direct the listener's eyes smoothly to the visual diagram on screen (e.g. 'Looking at the diagram on page 2, this illustrates...' or 'As shown in Figure 1...').\n"
+                "   - Synthesize and explain the diagram's structure clearly using its caption and OCR labels so the listener understands the key visual elements while looking at the highlighted bounding box.\n"
+                "   - Keep chunk_id linked so the image bounding box highlights on the document canvas during dictation.\n"
+                "9. For chemical formulas like H2O, CO2, write as `$H_2O$ (H 2 O)`, `$CO_2$ (C O 2)` in the script.\n"
                 + self._build_tone_prompt_rules(instruction)
-                + "9. Return ONLY a valid JSON array of objects with keys: chunk_id, segment_index, text, chapter_heading.\n\n"
+                + "10. Return ONLY a valid JSON array of objects with keys: chunk_id, segment_index, text, chapter_heading.\n\n"
                 f"Planned Chunks:\n{json.dumps(input_payload, ensure_ascii=False)}"
             )
 
@@ -652,6 +797,8 @@ class ScriptService:
                                         page_number=c.get("page_number", 1),
                                         bbox=c.get("bbox"),
                                         chapter_heading=heading_to_use,
+                                        chunk_type=c.get("chunk_type", "text"),
+                                        image_url=c.get("image_url"),
                                     )
                                 )
             except Exception as exc:
@@ -684,6 +831,7 @@ class ScriptService:
                 {
                     "chunk_id": c["id"],
                     "page": c.get("page_number", 1),
+                    "type": c.get("chunk_type", "text"),
                     "section": self._extract_heading(c),
                     "text": (c.get("content") or "").strip(),
                 }
@@ -706,8 +854,12 @@ class ScriptService:
                 "   - NEVER output raw unformatted variable names like 'Hstatic' or 'Hdynamic'.\n"
                 "   - Cleanly omit visual PDF diagram artifacts such as overbrace and underbrace characters (⏞, ⏟) and instead explain the equation naturally.\n"
                 "6. For chemical formulas like H2O, CO2, write as `$H_2O$ (H 2 O)`, `$CO_2$ (C O 2)` in the script.\n"
-                "7. Return ONLY a valid JSON array of objects with keys: chunk_id, segment_index, text, chapter_heading.\n"
-                "8. Strictly no markdown commentary, no code fences.\n\n"
+                "7. FOR FIGURES, DIAGRAMS & IMAGES (type='image' or content begins with [Figure ...]):\n"
+                "   - Direct the listener's eyes smoothly to the visual diagram on screen (e.g. 'Looking at the diagram on page 2, this illustrates...' or 'As shown in Figure 1...').\n"
+                "   - Synthesize and explain the diagram's structure clearly using its caption and OCR labels so the listener understands the key visual elements while looking at the highlighted bounding box.\n"
+                "   - Keep chunk_id linked so the image bounding box highlights on the document canvas during dictation.\n"
+                "8. Return ONLY a valid JSON array of objects with keys: chunk_id, segment_index, text, chapter_heading.\n"
+                "9. Strictly no markdown commentary, no code fences.\n\n"
                 f"Chunks:\n{json.dumps(input_payload, ensure_ascii=False)}"
             )
 
@@ -735,6 +887,8 @@ class ScriptService:
                                     page_number=c.get("page_number", 1),
                                     bbox=c.get("bbox"),
                                     chapter_heading=heading_to_use,
+                                    chunk_type=c.get("chunk_type", "text"),
+                                    image_url=c.get("image_url"),
                                 )
                             )
             except Exception as batch_err:
@@ -825,9 +979,11 @@ class ScriptService:
                 {
                     "id": p.get("id", f"p_{i}"),
                     "chunk_index": i,
+                    "chunk_type": p.get("chunkType") or p.get("chunk_type") or "text",
                     "content": p.get("text") or p.get("content", ""),
                     "page_number": (p.get("bbox", {}).get("page") if isinstance(p.get("bbox"), dict) else p.get("page", 1)) or 1,
                     "bbox": p.get("bbox") if isinstance(p.get("bbox"), dict) else None,
+                    "image_url": p.get("imageUrl") or p.get("image_url"),
                 }
                 for i, p in enumerate(fallback_chunks)
             ]

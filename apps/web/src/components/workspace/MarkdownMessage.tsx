@@ -449,10 +449,13 @@ function renderIndexedInlines(
           {node.numbers.map((num, nIdx) => {
             const matched = findMatchingCitation(citationCtx?.citations, num);
             const isWeb = Boolean(matched?.url || matched?.source === "web");
+            const isImage = !isWeb && (matched?.chunkType === "image" || matched?.chunkType === "figure" || matched?.chunkType === "diagram" || Boolean(matched?.imageUrl));
             const canClick = Boolean(matched && citationCtx?.onCitationClick);
             const tooltip = matched
               ? matched.url
                 ? `[${num}] Web source: ${matched.label}${matched.snippet ? ` — ${matched.snippet}` : ""}`
+                : isImage
+                ? `[${num}] Figure on Page ${matched.page ?? 1}: ${matched.snippet || matched.label}`
                 : `[${num}] PDF Page ${matched.page ?? 1}: ${matched.label}${matched.snippet ? ` — ${matched.snippet}` : ""}`
               : `[${num}]`;
             return (
@@ -481,15 +484,20 @@ function renderIndexedInlines(
                     style={{
                       display: "inline-flex",
                       alignItems: "center",
+                      gap: "2px",
                       padding: "0 4px",
                       borderRadius: "4px",
                       border: isWeb
                         ? "1px solid rgba(45, 212, 191, 0.5)"
+                        : isImage
+                        ? "1px solid rgba(192, 132, 252, 0.65)"
                         : "1px solid rgba(0, 245, 212, 0.45)",
                       background: isWeb
                         ? "rgba(13, 148, 136, 0.22)"
+                        : isImage
+                        ? "rgba(168, 85, 247, 0.22)"
                         : "rgba(0, 245, 212, 0.14)",
-                      color: isWeb ? "#5eead4" : "#00f5d4",
+                      color: isWeb ? "#5eead4" : isImage ? "#d8b4fe" : "#00f5d4",
                       fontFamily: "var(--font-mono)",
                       fontSize: "inherit",
                       fontWeight: 650,
@@ -498,7 +506,14 @@ function renderIndexedInlines(
                       verticalAlign: "baseline",
                     }}
                   >
-                    [{num}]
+                    {isImage ? (
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: "2px" }}>
+                        <span style={{ fontSize: "0.85em", opacity: 0.9 }}>🖼️</span>
+                        <span>[{num}]</span>
+                      </span>
+                    ) : (
+                      `[${num}]`
+                    )}
                   </button>
                 ) : (
                   <span
@@ -507,7 +522,7 @@ function renderIndexedInlines(
                       display: "inline-block",
                       padding: "0 3px",
                       borderRadius: "4px",
-                      color: matched ? (isWeb ? "#5eead4" : "#00f5d4") : "#94a3b8",
+                      color: matched ? (isWeb ? "#5eead4" : isImage ? "#d8b4fe" : "#00f5d4") : "#94a3b8",
                       fontFamily: "var(--font-mono)",
                       fontSize: "inherit",
                       fontWeight: 600,

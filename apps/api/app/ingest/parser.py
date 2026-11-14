@@ -28,6 +28,10 @@ class ParsedElement:
     table_markdown: Optional[str] = None
     image_bytes: Optional[bytes] = None
     image_ext: Optional[str] = None
+    image_url: Optional[str] = None
+    ocr_text: Optional[str] = None
+    caption: Optional[str] = None
+    figure_label: Optional[str] = None
     token_count: int = 0
 
 

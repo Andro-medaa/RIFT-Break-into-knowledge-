@@ -25,6 +25,8 @@ export interface TranscriptParagraph {
   text: string;
   /** Normalised [0-1] bounding box on the PDF page */
   bbox?: { page: number; x: number; y: number; w: number; h: number };
+  chunkType?: string;
+  imageUrl?: string;
 }
 
 export interface RAGMessage {
@@ -87,7 +89,7 @@ interface WorkspaceState {
 
   /* ── Sync ── */
   activeParagraphId: string | null;
-  activeBBox: { page: number; x: number; y: number; w: number; h: number } | null;
+  activeBBox: { page: number; x: number; y: number; w: number; h: number; chunkType?: string; imageUrl?: string } | null;
 
   /* ── Transcript & Script ── */
   paragraphs: TranscriptParagraph[];
@@ -120,7 +122,7 @@ interface WorkspaceState {
   setZoom: (z: number) => void;
   togglePanMode: () => void;
   setActiveParagraph: (id: string | null) => void;
-  setActiveBBox: (bbox: { page: number; x: number; y: number; w: number; h: number } | null) => void;
+  setActiveBBox: (bbox: { page: number; x: number; y: number; w: number; h: number; chunkType?: string; imageUrl?: string } | null) => void;
   setParagraphs: (p: TranscriptParagraph[]) => void;
   setScriptSegments: (s: ScriptSegmentItem[]) => void;
   setPlaybackState: (s: PlaybackState) => void;
@@ -144,18 +146,18 @@ interface WorkspaceState {
   savedResumeAnchor: ResumeAnchor | null;
   isRepeatingSingle: boolean;
   activeChatReference: ChatReference | null;
-  playFromParagraph: (id: string, bbox?: { page: number; x: number; y: number; w: number; h: number }) => void;
-  repeatParagraph: (id: string, bbox?: { page: number; x: number; y: number; w: number; h: number }) => void;
+  playFromParagraph: (id: string, bbox?: { page: number; x: number; y: number; w: number; h: number; chunkType?: string; imageUrl?: string }) => void;
+  repeatParagraph: (id: string, bbox?: { page: number; x: number; y: number; w: number; h: number; chunkType?: string; imageUrl?: string }) => void;
   resumePreviousPlayback: () => void;
   clearResumeAnchor: () => void;
   setIsRepeatingSingle: (val: boolean) => void;
   setActiveChatReference: (ref: ChatReference | null) => void;
-  askAboutParagraph: (p: { id: string; text: string; bbox?: { page: number; x: number; y: number; w: number; h: number } }) => void;
+  askAboutParagraph: (p: { id: string; text: string; bbox?: { page: number; x: number; y: number; w: number; h: number; chunkType?: string; imageUrl?: string } }) => void;
 
   /** Navigate to a paragraph or bbox — syncs PDF page, bounding box reticles, and transcript scroll */
   navigateToParagraph: (
     id: string,
-    explicitBbox?: { page: number; x: number; y: number; w: number; h: number }
+    explicitBbox?: { page: number; x: number; y: number; w: number; h: number; chunkType?: string; imageUrl?: string }
   ) => void;
   navigateToBBox: (
     page: number,
@@ -195,12 +197,14 @@ export function WorkspaceProvider({
     y: number;
     w: number;
     h: number;
+    chunkType?: string;
+    imageUrl?: string;
   } | null>(null);
   const [paragraphs, setParagraphs] = useState<TranscriptParagraph[]>([]);
   const [scriptSegments, setScriptSegments] = useState<ScriptSegmentItem[]>([]);
   const [playbackState, setPlaybackState] = useState<PlaybackState>("idle");
   const [selectedVoice, setSelectedVoice] = useState<SpeechSynthesisVoice | null>(null);
-  const [selectedElevenVoice, setSelectedElevenVoice] = useState("pNInz6obpgDQGcFmaJgB");
+  const [selectedElevenVoice, setSelectedElevenVoice] = useState("hpp4J3VqNfWAUOO0d1Us");
   const [selectedLang, setSelectedLang] = useState("en-US");
   const [voiceEngine, setVoiceEngineState] = useState<VoiceEngine>(() => {
     if (typeof window !== "undefined") {
@@ -381,7 +385,7 @@ export function WorkspaceProvider({
   const navigateToParagraph = useCallback(
     (
       id: string,
-      explicitBbox?: { page: number; x: number; y: number; w: number; h: number }
+      explicitBbox?: { page: number; x: number; y: number; w: number; h: number; chunkType?: string; imageUrl?: string }
     ) => {
       setActiveParagraphId(id);
 

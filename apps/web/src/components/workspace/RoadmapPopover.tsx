@@ -25,7 +25,7 @@ export interface RoadmapChapter {
   previewText?: string;
 }
 
-export default function RoadmapPopover() {
+export default function RoadmapPopover({ isMobile = false }: { isMobile?: boolean } = {}) {
   const {
     paragraphs,
     scriptSegments,
@@ -316,41 +316,45 @@ export default function RoadmapPopover() {
           }}
         />
 
-        <span
-          style={{
-            fontSize: "10px",
-            fontWeight: 700,
-            fontFamily: "var(--font-mono)",
-            color: "#67e8f9",
-            letterSpacing: "0.08em",
-            textTransform: "uppercase",
-          }}
-        >
-          ROADMAP
-        </span>
+        {!isMobile && (
+          <>
+            <span
+              style={{
+                fontSize: "10px",
+                fontWeight: 700,
+                fontFamily: "var(--font-mono)",
+                color: "#67e8f9",
+                letterSpacing: "0.08em",
+                textTransform: "uppercase",
+              }}
+            >
+              ROADMAP
+            </span>
 
-        {/* Mini progress track */}
-        <div
-          style={{
-            width: "60px",
-            height: "4px",
-            borderRadius: "2px",
-            background: "rgba(255, 255, 255, 0.1)",
-            overflow: "hidden",
-            margin: "0 2px",
-          }}
-        >
-          <div
-            style={{
-              width: `${coveragePct}%`,
-              height: "100%",
-              background: "linear-gradient(90deg, #00f5d4, #10b981)",
-              borderRadius: "2px",
-              boxShadow: "0 0 6px rgba(0, 245, 212, 0.6)",
-              transition: "width 0.4s cubic-bezier(0.16, 1, 0.3, 1)",
-            }}
-          />
-        </div>
+            {/* Mini progress track */}
+            <div
+              style={{
+                width: "60px",
+                height: "4px",
+                borderRadius: "2px",
+                background: "rgba(255, 255, 255, 0.1)",
+                overflow: "hidden",
+                margin: "0 2px",
+              }}
+            >
+              <div
+                style={{
+                  width: `${coveragePct}%`,
+                  height: "100%",
+                  background: "linear-gradient(90deg, #00f5d4, #10b981)",
+                  borderRadius: "2px",
+                  boxShadow: "0 0 6px rgba(0, 245, 212, 0.6)",
+                  transition: "width 0.4s cubic-bezier(0.16, 1, 0.3, 1)",
+                }}
+              />
+            </div>
+          </>
+        )}
 
         <span
           style={{
@@ -377,8 +381,9 @@ export default function RoadmapPopover() {
             style={{
               position: "absolute",
               top: "calc(100% + 9px)",
-              right: 0,
-              width: "360px",
+              right: isMobile ? "-10px" : 0,
+              width: isMobile ? "calc(100vw - 28px)" : "360px",
+              maxWidth: "360px",
               maxHeight: "460px",
               background: "rgba(2, 8, 14, 0.97)",
               backdropFilter: "blur(24px)",

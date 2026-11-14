@@ -13,6 +13,8 @@ class ScriptSegment(BaseModel):
     page_number: int
     bbox: Optional[dict[str, Any]] = None
     chapter_heading: Optional[str] = None
+    chunk_type: Optional[str] = "text"
+    image_url: Optional[str] = None
 
 
 class ScriptRequest(BaseModel):

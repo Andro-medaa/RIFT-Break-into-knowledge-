@@ -19,7 +19,8 @@ import { pdfjs } from "react-pdf";
 import { getDocumentChunks } from "@/lib/api";
 import { WorkspaceProvider, useWorkspace } from "@/lib/workspace";
 import type { TranscriptParagraph } from "@/lib/workspace";
-import { CheckCircle2 } from "lucide-react";
+import { CheckCircle2, MessageSquare } from "lucide-react";
+import { useIsMobile } from "@/lib/useIsMobile";
 import PDFViewer from "./PDFViewer";
 import TranscriptPanel from "./TranscriptPanel";
 import RAGPanel from "./RAGPanel";
@@ -177,6 +178,8 @@ function TranscriptExtractor({ documentId }: { documentId?: string }) {
                     h: typeof c.bbox.h === "number" ? c.bbox.h : parseFloat(String(c.bbox.h)),
                   }
                 : undefined,
+              chunkType: c.chunk_type,
+              imageUrl: c.image_url,
             }));
             setParagraphs(paras);
             return;
@@ -497,6 +500,8 @@ function ColumnDivider({
 function Layout({ documentId }: { documentId?: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const { paragraphs, activeParagraphId } = useWorkspace();
+  const isMobile = useIsMobile(768);
+  const [mobileSheet, setMobileSheet] = useState<"none" | "script" | "chat">("none");
 
   /* Reading roadmap: coverage = how many paragraphs have been activated / total */
   const withBoxCount = paragraphs.filter((p) => p.bbox && p.bbox.w > 0.001).length;
@@ -580,70 +585,218 @@ function Layout({ documentId }: { documentId?: string }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%", minHeight: 0 }}>
       {/* ── Top bar controls portal → rendered into top bar where roadmap text exists ── */}
-      {portalTarget && createPortal(<TopBarControls />, portalTarget)}
+      {portalTarget && createPortal(<TopBarControls isMobile={isMobile} />, portalTarget)}
 
-    <div
-      ref={containerRef}
-      style={{
-        display: "flex",
-        flexDirection: "row",
-        height: "100%",
-        width: "100%",
-        minHeight: 0,
-        minWidth: 0,
-        overflow: "hidden",
-        userSelect: "none",
-        gap: 0,
-      }}
-    >
-      {/* ── Column 1: PDF Viewer ── */}
-      <div
-        style={{
-          width: w0,
-          flexShrink: 0,
-          height: "100%",
-          minHeight: 0,
-          overflow: "hidden",
-        }}
-      >
-        <PDFViewer />
-      </div>
+      {isMobile ? (
+        /* ════════════════════════════════════════════════════════════════════════════
+           Mobile Layout (< 768px):
+           • PDF Viewer is default view (100% of workspace)
+           • Bottom floating row: one-liner script bar + round Chat FAB button
+           • Draggable upper border expands script drawer (unlocks scrolling & controls)
+           • Chat opens full-screen sheet; tapping citation returns to PDF bbox
+        ════════════════════════════════════════════════════════════════════════════ */
+        <div
+          ref={containerRef}
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            height: "100%",
+            width: "100%",
+            minHeight: 0,
+            minWidth: 0,
+            overflow: "hidden",
+            position: "relative",
+          }}
+        >
+          {/* Default Full-Screen PDF Canvas */}
+          <div
+            style={{
+              width: "100%",
+              height: "100%",
+              minHeight: 0,
+              overflow: "hidden",
+              position: "relative",
+            }}
+          >
+            <PDFViewer />
+          </div>
 
-      {/* ── Divider 0 (between PDF and Transcript) ── */}
-      <ColumnDivider onDrag={onDragDivider0} />
+          {/* Dimmed backdrop when script drawer is expanded */}
+          {mobileSheet === "script" && (
+            <div
+              onClick={() => setMobileSheet("none")}
+              style={{
+                position: "absolute",
+                inset: 0,
+                background: "rgba(0, 0, 0, 0.65)",
+                backdropFilter: "blur(2px)",
+                WebkitBackdropFilter: "blur(2px)",
+                zIndex: 38,
+                animation: "fadeIn 0.2s ease-out",
+              }}
+            />
+          )}
 
-      {/* ── Column 2: Transcript Panel ── */}
-      <div
-        style={{
-          width: w1,
-          flexShrink: 0,
-          height: "100%",
-          minHeight: 0,
-          overflow: "hidden",
-        }}
-      >
-        <TranscriptPanel />
-      </div>
+          {/* Script Section: Collapsed One-Liner or Expanded 76vh Drawer */}
+          <div
+            style={{
+              position: "absolute",
+              left: mobileSheet === "script" ? 0 : "10px",
+              right: mobileSheet === "script" ? 0 : "66px",
+              bottom: mobileSheet === "script" ? 0 : "12px",
+              height: mobileSheet === "script" ? "76vh" : "56px",
+              zIndex: mobileSheet === "script" ? 45 : 39,
+              transition:
+                "height 0.28s cubic-bezier(0.16, 1, 0.3, 1), bottom 0.25s ease, left 0.25s ease, right 0.25s ease",
+              borderRadius: mobileSheet === "script" ? "20px 20px 0 0" : "16px",
+              overflow: "hidden",
+              boxShadow:
+                mobileSheet === "script"
+                  ? "0 -10px 40px rgba(0, 0, 0, 0.9), 0 0 25px rgba(0, 245, 212, 0.15)"
+                  : "0 8px 30px rgba(0, 0, 0, 0.8)",
+              display: mobileSheet === "chat" ? "none" : "block",
+            }}
+          >
+            <TranscriptPanel
+              isMobile={true}
+              isExpanded={mobileSheet === "script"}
+              onToggleMobileExpand={() =>
+                setMobileSheet((prev) => (prev === "script" ? "none" : "script"))
+              }
+              onOpenChat={() => setMobileSheet("chat")}
+            />
+          </div>
 
-      {/* ── Divider 1 (between Transcript and RAG) ── */}
-      <ColumnDivider onDrag={onDragDivider1} />
+          {/* Round Chat FAB Button docked beside the script bar */}
+          {mobileSheet !== "chat" && (
+            <button
+              type="button"
+              onClick={() => {
+                // If script section is expanded, it shrinks and chat section expands
+                setMobileSheet("chat");
+              }}
+              style={{
+                position: "absolute",
+                right: "10px",
+                bottom: "16px",
+                width: "48px",
+                height: "48px",
+                borderRadius: "50%",
+                background:
+                  "linear-gradient(135deg, rgba(0, 245, 212, 0.95), rgba(13, 148, 136, 0.95))",
+                border: "1.5px solid #00f5d4",
+                boxShadow:
+                  "0 4px 20px rgba(0, 245, 212, 0.45), 0 0 14px rgba(0, 245, 212, 0.3)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+                color: "#020406",
+                zIndex: 46,
+                transition: "all 0.15s ease",
+              }}
+              title="Open Ask RIFT AI Chat"
+            >
+              <MessageSquare size={21} fill="#020406" />
+            </button>
+          )}
 
-      {/* ── Column 3: RAG / Q&A Panel ── */}
-      <div
-        style={{
-          width: w2,
-          flexShrink: 0,
-          height: "100%",
-          minHeight: 0,
-          overflow: "hidden",
-        }}
-      >
-        <RAGPanel />
-      </div>
+          {/* Full-Screen Chat Modal */}
+          {mobileSheet === "chat" && (
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                zIndex: 50,
+                background: "rgba(2, 6, 10, 0.98)",
+                display: "flex",
+                flexDirection: "column",
+                animation: "fadeIn 0.2s ease-out",
+              }}
+            >
+              <RAGPanel
+                isMobile={true}
+                onCloseMobile={() => setMobileSheet("none")}
+                onCitationClickClose={() => {
+                  // Jump back to PDF viewer focused on that bbox or image bbox!
+                  setMobileSheet("none");
+                }}
+              />
+            </div>
+          )}
 
-      {/* Silent transcript extractor */}
-      <TranscriptExtractor documentId={documentId} />
-    </div>
+          {/* Silent transcript extractor */}
+          <TranscriptExtractor documentId={documentId} />
+        </div>
+      ) : (
+        /* ════════════════════════════════════════════════════════════════════════════
+           Desktop Layout (>= 768px):
+           • 3 vertical columns: PDF Viewer | Transcript | RAG Q&A
+           • Draggable splitters between columns
+        ════════════════════════════════════════════════════════════════════════════ */
+        <div
+          ref={containerRef}
+          style={{
+            display: "flex",
+            flexDirection: "row",
+            height: "100%",
+            width: "100%",
+            minHeight: 0,
+            minWidth: 0,
+            overflow: "hidden",
+            userSelect: "none",
+            gap: 0,
+          }}
+        >
+          {/* ── Column 1: PDF Viewer ── */}
+          <div
+            style={{
+              width: w0,
+              flexShrink: 0,
+              height: "100%",
+              minHeight: 0,
+              overflow: "hidden",
+            }}
+          >
+            <PDFViewer />
+          </div>
+
+          {/* ── Divider 0 (between PDF and Transcript) ── */}
+          <ColumnDivider onDrag={onDragDivider0} />
+
+          {/* ── Column 2: Transcript Panel ── */}
+          <div
+            style={{
+              width: w1,
+              flexShrink: 0,
+              height: "100%",
+              minHeight: 0,
+              overflow: "hidden",
+            }}
+          >
+            <TranscriptPanel />
+          </div>
+
+          {/* ── Divider 1 (between Transcript and RAG) ── */}
+          <ColumnDivider onDrag={onDragDivider1} />
+
+          {/* ── Column 3: RAG / Q&A Panel ── */}
+          <div
+            style={{
+              width: w2,
+              flexShrink: 0,
+              height: "100%",
+              minHeight: 0,
+              overflow: "hidden",
+            }}
+          >
+            <RAGPanel />
+          </div>
+
+          {/* Silent transcript extractor */}
+          <TranscriptExtractor documentId={documentId} />
+        </div>
+      )}
     </div>
   );
 }

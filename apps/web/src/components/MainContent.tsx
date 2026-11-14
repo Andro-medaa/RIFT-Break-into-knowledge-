@@ -14,7 +14,7 @@ import UploadBox from "./UploadBox";
 import SpiralGalaxiesBackground from "./SpiralGalaxiesBackground";
 import { useRift } from "@/lib/store";
 
-export default function MainContent() {
+export default function MainContent({ isMobile = false }: { isMobile?: boolean } = {}) {
   const { error, setError } = useRift();
 
   return (
@@ -30,7 +30,7 @@ export default function MainContent() {
       style={{
         flex: 1,
         height: "100%",
-        borderRadius: "26px",
+        borderRadius: isMobile ? "18px" : "26px",
         background: "rgba(3, 8, 12, 0.92)",
         backdropFilter: "none",
         WebkitBackdropFilter: "none",
@@ -185,10 +185,10 @@ export default function MainContent() {
             display: "flex",
             justifyContent: "center",
             width: "100%",
-            padding: "0 32px",
+            padding: isMobile ? "0 12px" : "0 32px",
           }}
         >
-          <UploadBox />
+          <UploadBox isMobile={isMobile} />
         </motion.div>
       </div>
 
