@@ -37,9 +37,9 @@
 ## 🎬 Product Demo Showcase
 
 <div align="center">
-  <video src="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/rift-product-demo.mp4" controls autoplay loop muted playsinline width="100%" style="border-radius: 12px; border: 1px solid rgba(0, 245, 212, 0.3); box-shadow: 0 8px 32px rgba(0, 245, 212, 0.15);"></video>
+  <img src="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/gifs/hero-demo.gif" alt="RIFT Product Demo" width="100%" style="border-radius: 12px; border: 1px solid rgba(0, 245, 212, 0.3); box-shadow: 0 8px 32px rgba(0, 245, 212, 0.15);" />
   <p align="center">
-    <sub>📺 <em>If video does not autoplay in your browser, <a href="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/rift-product-demo.mp4">click here to watch the full walkthrough</a>.</em></sub>
+    <sub>🎬 <em>RIFT Interactive Product Walkthrough — Document Intelligence & Real-Time Voice Synchronization</em></sub>
   </p>
 </div>
 
@@ -66,15 +66,11 @@ Talk naturally without holding down a button. RIFT features continuous speech re
   <tr>
     <td width="50%" align="center">
       <b>Desktop Voice Q&A & Fluid Orb</b><br /><br />
-      <video src="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/voice%20input.mp4" controls autoplay loop muted playsinline width="100%"></video>
-      <br />
-      <sub><a href="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/voice%20input.mp4">Watch Direct</a></sub>
+      <img src="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/gifs/voice-input.gif" alt="Desktop Voice Q&A" width="100%" style="border-radius: 8px;" />
     </td>
     <td width="50%" align="center">
       <b>Mobile Hands-Free Listening Mode</b><br /><br />
-      <video src="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/phone%20shots/listening%20mode.mp4" controls autoplay loop muted playsinline width="100%"></video>
-      <br />
-      <sub><a href="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/phone%20shots/listening%20mode.mp4">Watch Direct</a></sub>
+      <img src="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/gifs/listening-mode-mobile.gif" alt="Mobile Hands-Free Listening Mode" width="100%" style="border-radius: 8px;" />
     </td>
   </tr>
 </table>
@@ -88,15 +84,11 @@ Gemini transforms PDF sections into fluid spoken scripts with chapter headings. 
   <tr>
     <td width="50%" align="center">
       <b>Synchronized Word Karaoke</b><br /><br />
-      <video src="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/dictation.mp4" controls autoplay loop muted playsinline width="100%"></video>
-      <br />
-      <sub><a href="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/dictation.mp4">Watch Direct</a></sub>
+      <img src="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/gifs/dictation.gif" alt="Synchronized Word Karaoke" width="100%" style="border-radius: 8px;" />
     </td>
     <td width="50%" align="center">
       <b>Chapter Extraction & Outlining</b><br /><br />
-      <video src="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/chapters.mp4" controls autoplay loop muted playsinline width="100%"></video>
-      <br />
-      <sub><a href="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/chapters.mp4">Watch Direct</a></sub>
+      <img src="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/gifs/chapters.gif" alt="Chapter Extraction & Outlining" width="100%" style="border-radius: 8px;" />
     </td>
   </tr>
 </table>
@@ -110,15 +102,11 @@ Every answer is verified against the source text. Click citations to trigger an 
   <tr>
     <td width="50%" align="center">
       <b>Source Citation Navigation</b><br /><br />
-      <video src="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/source%20citation.mp4" controls autoplay loop muted playsinline width="100%"></video>
-      <br />
-      <sub><a href="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/source%20citation.mp4">Watch Direct</a></sub>
+      <img src="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/gifs/source-citation.gif" alt="Source Citation Navigation" width="100%" style="border-radius: 8px;" />
     </td>
     <td width="50%" align="center">
       <b>Spotlight Reticle Mode</b><br /><br />
-      <video src="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/sportlight-mode.mp4" controls autoplay loop muted playsinline width="100%"></video>
-      <br />
-      <sub><a href="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/sportlight-mode.mp4">Watch Direct</a></sub>
+      <img src="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/gifs/spotlight-mode.gif" alt="Spotlight Reticle Mode" width="100%" style="border-radius: 8px;" />
     </td>
   </tr>
 </table>
@@ -132,15 +120,11 @@ Navigate 100+ page documents with ease using the high-altitude visual mini-map. 
   <tr>
     <td width="50%" align="center">
       <b>Document Mini-Map Overview</b><br /><br />
-      <video src="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/mini-map.mp4" controls autoplay loop muted playsinline width="100%"></video>
-      <br />
-      <sub><a href="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/mini-map.mp4">Watch Direct</a></sub>
+      <img src="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/gifs/mini-map.gif" alt="Document Mini-Map Overview" width="100%" style="border-radius: 8px;" />
     </td>
     <td width="50%" align="center">
       <b>Mobile Responsive Teleprompter & Drawer</b><br /><br />
-      <video src="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/phone%20shots/script%20section.mp4" controls autoplay loop muted playsinline width="100%"></video>
-      <br />
-      <sub><a href="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/phone%20shots/script%20section.mp4">Watch Direct</a></sub>
+      <img src="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/gifs/script-section-mobile.gif" alt="Mobile Responsive Teleprompter & Drawer" width="100%" style="border-radius: 8px;" />
     </td>
   </tr>
 </table>
@@ -154,15 +138,11 @@ Step into an obsidian-and-neon galaxy landing portal with fluid file drops, real
   <tr>
     <td width="50%" align="center">
       <b>Galaxy Landing Portal & Dropzone</b><br /><br />
-      <video src="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/homepage-1.mp4" controls autoplay loop muted playsinline width="100%"></video>
-      <br />
-      <sub><a href="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/homepage-1.mp4">Watch Direct</a></sub>
+      <img src="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/gifs/homepage.gif" alt="Galaxy Landing Portal & Dropzone" width="100%" style="border-radius: 8px;" />
     </td>
     <td width="50%" align="center">
       <b>Dual Voice Engine Switcher</b><br /><br />
-      <video src="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/voice-option.mp4" controls autoplay loop muted playsinline width="100%"></video>
-      <br />
-      <sub><a href="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/voice-option.mp4">Watch Direct</a></sub>
+      <img src="https://github.com/Andro-medaa/RIFT-Break-into-knowledge-/raw/main/for%20product%20video/gifs/voice-option.gif" alt="Dual Voice Engine Switcher" width="100%" style="border-radius: 8px;" />
     </td>
   </tr>
 </table>
